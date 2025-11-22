@@ -1,0 +1,463 @@
+Metadata-Version: 2.4
+Name: FBTools
+Version: 0.1.0
+Summary: Facebook automation toolkit using reverse-engineered GraphQL API
+Author-email: Dapunta Khurayra X <dapuntaxd@gmail.com>
+Maintainer: Walkercito
+Project-URL: Homepage, https://github.com/Walkercito/FBToolKit
+Project-URL: Bug Tracker, https://github.com/Walkercito/FBToolKit/issues
+Project-URL: Original Repository, https://github.com/Dapunta/FBTools
+Keywords: facebook-scraper,facebook-parser,facebook-automation,facebook-tools,facebook-graphql
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.28.0
+Requires-Dist: aiohttp>=3.8.0
+Requires-Dist: pycryptodome>=3.15.0
+Requires-Dist: PyNaCl>=1.5.0
+Requires-Dist: pyotp>=2.8.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+Dynamic: license-file
+
+# FBTools
+
+Facebook Automation Toolkit using reverse-engineered GraphQL API.
+
+| | |
+|---|---|
+| **Original Author** | [Dapunta Khurayra X](https://github.com/Dapunta) |
+| **Maintainer** | [Walkercito](https://github.com/Walkercito) |
+| **Original Repo** | [FBToolsBox](https://github.com/Dapunta/FBToolsBox) |
+| **Version** | 0.1.0 |
+| **Python** | 3.9 - 3.12 |
+
+---
+
+## What's New in This Fork
+
+This fork includes major improvements over the original library:
+
+- **Modern Package Structure**: Uses `pyproject.toml` instead of `setup.py`
+- **Async Support**: Full async/await support using `aiohttp`
+- **Better Error Handling**: Custom exception hierarchy instead of silent failures
+- **Image URL Support**: Load images from URLs (Imgur, etc.) or local files
+- **English Documentation**: All messages and docs translated to English
+- **Safe Regex Patterns**: No more `AttributeError` from failed regex matches
+- **Proper Logging**: Configurable logging instead of print statements
+
+---
+
+## Installation
+
+```bash
+# From source
+git clone https://github.com/Walkercito/FBToolKit.git
+cd FBToolKit
+pip install -e .
+
+# With development dependencies
+pip install -e ".[dev]"
+```
+
+### Dependencies
+
+- `requests>=2.28.0` - Sync HTTP client
+- `aiohttp>=3.8.0` - Async HTTP client
+- `pycryptodome>=3.15.0` - Encryption utilities
+- `PyNaCl>=1.5.0` - Cryptography library
+- `pyotp>=2.8.0` - 2FA TOTP generation
+
+---
+
+## Quick Start
+
+### Synchronous Usage
+
+```python
+from FBTools import Start
+
+# Login with cookie
+fb = Start(cookie="your_facebook_cookie")
+
+if fb.IsValid:
+    # Post to your feed
+    result = fb.PostToFeed(text="Hello World!")
+    print(result)
+
+    # Post to a group
+    result = fb.PostToGroup(group="123456789", text="Hello Group!")
+    print(result)
+```
+
+### Asynchronous Usage
+
+```python
+import asyncio
+from FBTools import AsyncStart
+
+async def main():
+    async with AsyncStart(cookie="your_cookie") as fb:
+        if fb.IsValid:
+            # Post to feed
+            result = await fb.PostToFeed(text="Hello async world!")
+            print(result)
+
+            # Post to group with images
+            result = await fb.PostToGroup(
+                group="123456789",
+                text="Check out these images!",
+                url=["https://i.imgur.com/example.jpg", "/path/to/local/image.png"]
+            )
+            print(result)
+
+asyncio.run(main())
+```
+
+---
+
+## Features
+
+### Authentication
+
+```python
+from FBTools import Start
+
+# Login with cookie (recommended)
+fb = Start(cookie="sb=xxx; datr=xxx; c_user=xxx; xs=xxx; fr=xxx;")
+
+# Login with email & password
+fb = Start(email="user@example.com", password="your_password")
+
+# Login with phone & password
+fb = Start(phone="1234567890", password="your_password")
+
+# Check if login was successful
+if fb.IsValid:
+    print("Logged in successfully!")
+```
+
+### Get Access Tokens
+
+```python
+token_eaag = fb.TokenEAAG()
+token_eaab = fb.TokenEAAB()
+token_eaad = fb.TokenEAAD()
+token_eaac = fb.TokenEAAC()
+token_eaaf = fb.TokenEAAF()
+token_eabb = fb.TokenEABB()
+```
+
+### Get Profile/Page/Group Information
+
+```python
+# Get profile info
+profile = fb.GetInfoProfile("username_or_id")
+print(profile.id)
+print(profile.name)
+print(profile.friend)
+print(profile.follower)
+
+# Get page info
+page = fb.GetInfoPage("page_username_or_id")
+print(page.id)
+print(page.name)
+print(page.follower)
+
+# Get group info
+group = fb.GetInfoGroup("group_id")
+print(group.id)
+print(group.name)
+print(group.member)
+```
+
+### Posting
+
+#### Post to Feed
+
+```python
+result = fb.PostToFeed(
+    text="Hello World!",
+    url=["https://i.imgur.com/image.jpg", "/local/path/image.png"],  # Optional images
+    tag=["friend_id_1", "friend_id_2"],  # Optional friend tags
+    privacy=1  # 1=Public, 2=Friends, 3=Only Me
+)
+
+# Response format
+# {'status': 'success', 'id': 'post_id', 'message': None, 'upload_errors': None}
+# {'status': 'failed', 'id': None, 'message': 'error description', 'upload_errors': [...]}
+```
+
+#### Post to Group
+
+```python
+result = fb.PostToGroup(
+    group="group_id",  # Required
+    text="Hello Group!",
+    url=["https://example.com/image.jpg"],
+    tag=["friend_id"]
+)
+
+# Response format includes 'pending' status for groups with admin approval
+# {'status': 'pending', 'id': 'post_id', 'message': 'Post is pending admin approval'}
+```
+
+### Comments
+
+```python
+result = fb.CommentToPost(
+    post="post_url_or_id",
+    text="Great post!",
+    photo="https://example.com/image.jpg",  # Optional
+    tag=["user_id"]  # Optional
+)
+```
+
+### Reactions
+
+```python
+# Reaction types: 1=Like, 2=Love, 3=Haha, 4=Wow, 5=Care, 6=Sad, 7=Angry
+result = fb.ReactToPost(post="post_url_or_id", react=2)  # Love reaction
+```
+
+### Sharing
+
+```python
+# Share to feed
+result = fb.ShareToFeed(
+    post="post_url_or_id",
+    text="Check this out!",
+    privacy=1
+)
+
+# Share to group
+result = fb.ShareToGroup(
+    post="post_url_or_id",
+    group="group_id",
+    text="Sharing to group!"
+)
+```
+
+### Privacy Settings
+
+```python
+# Change post privacy (1=Public, 2=Friends, 3=Only Me)
+result = fb.PostPrivacy(post="post_id", privacy=3)
+
+# Change photo privacy
+result = fb.PhotoPrivacy(photo="photo_id", privacy=2)
+
+# Change album privacy
+result = fb.AlbumPrivacy(album="album_id", privacy=1)
+```
+
+### Friend Actions
+
+```python
+fb.AddFriend(id="user_id")
+fb.UnFriend(id="user_id")
+fb.Follow(id="user_id")
+fb.UnFollow(id="user_id")
+fb.Block(id="user_id")
+fb.UnBlock(id="user_id")
+```
+
+### Account Settings
+
+```python
+# Enable 2FA
+result = fb.Authentication(active=True, password="your_password")
+# Returns: {'status': 'success', 'key': '2FA_KEY', 'recovery': [...], 'message': None}
+
+# Disable 2FA
+result = fb.Authentication(active=False, password="your_password")
+
+# Check connected apps
+apps = fb.CheckApp()
+# Returns: {'active': [...], 'expired': [...]}
+
+# Toggle profile guard
+result = fb.ProfileGuard(stat=True)  # Enable
+result = fb.ProfileGuard(stat=False)  # Disable
+```
+
+---
+
+## Async API Reference
+
+The async client provides the same functionality with `async/await` syntax:
+
+```python
+from FBTools import AsyncStart
+
+async with AsyncStart(cookie="your_cookie") as fb:
+    # Available methods:
+    await fb.PostToFeed(text="...", url=[...], tag=[...], privacy=1)
+    await fb.PostToGroup(group="...", text="...", url=[...], tag=[...])
+    await fb.ReactToPost(post="...", react=1)
+```
+
+### Manual Session Management
+
+```python
+fb = AsyncStart(cookie="your_cookie")
+await fb.connect()
+
+if fb.IsValid:
+    result = await fb.PostToFeed(text="Hello!")
+
+await fb.close()
+```
+
+---
+
+## Error Handling
+
+The library provides custom exceptions for better error handling:
+
+```python
+from FBTools import (
+    FBToolsError,        # Base exception
+    AuthenticationError, # Login failures
+    PostError,           # Post creation failures
+    GroupPostError,      # Group-specific post failures
+    ImageUploadError,    # Image upload failures
+    ValidationError,     # Invalid parameters
+    SessionError,        # Session extraction failures
+)
+
+try:
+    result = fb.PostToGroup(group=None, text="Hello")
+except ValidationError as e:
+    print(f"Invalid input: {e}")
+except PostError as e:
+    print(f"Post failed: {e}")
+except FBToolsError as e:
+    print(f"FBTools error: {e}")
+```
+
+---
+
+## Image Upload
+
+Images can be loaded from URLs or local files:
+
+```python
+# From URLs (Imgur, direct links, etc.)
+result = fb.PostToFeed(
+    text="Check out these images!",
+    url=[
+        "https://i.imgur.com/example.jpg",
+        "https://example.com/photo.png"
+    ]
+)
+
+# From local files
+result = fb.PostToFeed(
+    text="Local images",
+    url=[
+        "/path/to/image1.jpg",
+        "./relative/path/image2.png"
+    ]
+)
+
+# Mixed
+result = fb.PostToFeed(
+    text="Mixed sources",
+    url=[
+        "https://i.imgur.com/remote.jpg",
+        "/local/path/image.png"
+    ]
+)
+
+# Check for upload errors
+if result.get('upload_errors'):
+    print(f"Some images failed: {result['upload_errors']}")
+```
+
+---
+
+## Logging
+
+Configure logging to see what's happening:
+
+```python
+import logging
+
+# Enable debug logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger('FBTools')
+logger.setLevel(logging.DEBUG)
+
+# Now you'll see detailed logs
+fb = Start(cookie="your_cookie")
+```
+
+---
+
+## Response Format
+
+All methods return a dictionary with consistent structure:
+
+```python
+# Success
+{
+    'status': 'success',
+    'id': 'created_object_id',
+    'message': None,
+    'upload_errors': None  # or list of failed uploads
+}
+
+# Pending (for group posts requiring approval)
+{
+    'status': 'pending',
+    'id': 'post_id',
+    'message': 'Post is pending admin approval',
+    'upload_errors': None
+}
+
+# Failure
+{
+    'status': 'failed',
+    'id': None,
+    'message': 'Error description',
+    'upload_errors': ['image1.jpg failed: timeout', ...]
+}
+```
+
+---
+
+## Important Notes
+
+- This library uses Facebook's internal GraphQL API which may change without notice
+- Use responsibly and in accordance with Facebook's Terms of Service
+- Rate limiting may occur if too many requests are made in a short period
+- Cookie-based authentication is recommended over email/password login
+
+---
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+## Credits
+
+- Original library by [Dapunta Khurayra X](https://github.com/Dapunta)
+- Fork maintained by [Walkercito](https://github.com/Walkercito)

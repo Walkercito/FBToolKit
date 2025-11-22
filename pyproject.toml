@@ -7,7 +7,6 @@ name = "FBTools"
 version = "0.1.0"
 description = "Facebook automation toolkit using reverse-engineered GraphQL API"
 readme = "README.md"
-license = {text = "MIT"}
 authors = [
     {name = "Dapunta Khurayra X", email = "dapuntaxd@gmail.com"}
 ]
