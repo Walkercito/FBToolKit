@@ -4,12 +4,24 @@ FBTools - Facebook Automation Toolkit.
 A Python library for automating Facebook interactions using
 reverse-engineered GraphQL APIs.
 
-Example:
+Example (sync):
     >>> from FBTools import Start
     >>> fb = Start(cookie="your_facebook_cookie")
     >>> if fb.IsValid:
     ...     result = fb.PostToFeed(text="Hello World!")
     ...     print(result)
+
+Example (async):
+    >>> import asyncio
+    >>> from FBTools import AsyncStart
+    >>>
+    >>> async def main():
+    ...     async with AsyncStart(cookie="your_cookie") as fb:
+    ...         if fb.IsValid:
+    ...             result = await fb.PostToFeed(text="Hello async!")
+    ...             print(result)
+    >>>
+    >>> asyncio.run(main())
 
 Features:
     - Post to feeds and groups
@@ -19,6 +31,7 @@ Features:
     - Get profile, page, and group information
     - Manage 2FA authentication
     - Privacy controls
+    - Full async/await support
 
 Note:
     This library uses Facebook's internal GraphQL API and may break
@@ -51,6 +64,13 @@ from .exceptions import (
     ReactionError,
     ShareError,
     ValidationError,
+    SessionError,
+)
+from .async_client import (
+    AsyncStart,
+    AsyncPostToFeed,
+    AsyncPostToGroup,
+    AsyncReactToPost,
 )
 
 # Configure default logging
