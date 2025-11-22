@@ -342,8 +342,16 @@ class PostToFeed:
                 allow_redirects=True
             ).text
 
-            # Check for duplicate post error
-            if 'Status Baru Duplikat' in response or 'duplicate' in response.lower():
+            # Check for duplicate post error (language-agnostic patterns)
+            duplicate_patterns = [
+                '"error_summary"',
+                'duplicate',
+                'duplikat',  # Indonesian
+                'duplicado',  # Spanish
+                'dupliziert',  # German
+                'identique',  # French
+            ]
+            if any(p in response.lower() for p in duplicate_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 return {
                     'status': 'failed',
                     'id': None,
@@ -599,8 +607,18 @@ class PostToGroup:
                 allow_redirects=True
             ).text.replace('\\', '')
 
-            # Check for account restriction
-            if 'Akun Anda dibatasi' in response or 'account is restricted' in response.lower():
+            # Check for account restriction (language-agnostic patterns)
+            restriction_patterns = [
+                'restricted',
+                'dibatasi',  # Indonesian
+                'restringido',  # Spanish
+                'eingeschränkt',  # German
+                'restreint',  # French
+                'limitado',  # Portuguese
+                '"is_restricted":true',
+                '"can_post":false',
+            ]
+            if any(p in response.lower() for p in restriction_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 logger.warning("Account is restricted from posting to groups")
                 return {
                     'status': 'failed',
@@ -1165,11 +1183,14 @@ class ShareToFeed:
                 allow_redirects=True
             ).text.replace('\\', '')
 
-            # Check for errors
-            if 'Status Baru Duplikat' in response or 'duplicate' in response.lower():
+            # Check for errors (language-agnostic patterns)
+            duplicate_patterns = ['duplicate', 'duplikat', 'duplicado', 'dupliziert', 'identique']
+            share_error_patterns = ['unable to share', 'tidak dapat', 'no se puede compartir', 'kann nicht teilen', 'impossible de partager']
+
+            if any(p in response.lower() for p in duplicate_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 return {'status': 'failed', 'id': None, 'message': 'Duplicate share detected'}
 
-            if 'Tidak Dapat Membagikan' in response or 'unable to share' in response.lower():
+            if any(p in response.lower() for p in share_error_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 return {'status': 'failed', 'id': None, 'message': 'Unable to share - post may be deleted or private'}
 
             # Extract post ID
@@ -1355,8 +1376,14 @@ class ShareToGroup:
                 allow_redirects=True
             ).text.replace('\\', '')
 
-            # Check for account restriction
-            if 'Akun Anda dibatasi' in response or 'account is restricted' in response.lower():
+            # Check for account restriction (language-agnostic patterns)
+            restriction_patterns = [
+                'restricted', 'dibatasi', 'restringido', 'eingeschränkt', 'restreint', 'limitado',
+                '"is_restricted":true', '"can_post":false'
+            ]
+            share_error_patterns = ['unable to share', 'tidak dapat', 'no se puede compartir', 'kann nicht teilen', 'impossible de partager']
+
+            if any(p in response.lower() for p in restriction_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 logger.warning("Account is restricted from sharing to groups")
                 return {
                     'status': 'failed',
@@ -1364,8 +1391,8 @@ class ShareToGroup:
                     'message': 'Your account is currently restricted from sharing to groups'
                 }
 
-            # Check for share error
-            if 'Tidak Dapat Membagikan' in response or 'unable to share' in response.lower():
+            # Check for share error (language-agnostic)
+            if any(p in response.lower() for p in share_error_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', response):
                 return {'status': 'failed', 'id': None, 'message': 'Unable to share - post may be deleted or private'}
 
             # Extract post ID

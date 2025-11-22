@@ -335,7 +335,9 @@ class AsyncPostToFeed:
             ) as response:
                 text = await response.text()
 
-            if 'Status Baru Duplikat' in text or 'duplicate' in text.lower():
+            # Check for duplicate post error (language-agnostic patterns)
+            duplicate_patterns = ['duplicate', 'duplikat', 'duplicado', 'dupliziert', 'identique', '"error_summary"']
+            if any(p in text.lower() for p in duplicate_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', text):
                 return {
                     'status': 'failed',
                     'id': None,
@@ -535,7 +537,12 @@ class AsyncPostToGroup:
             ) as response:
                 text = (await response.text()).replace('\\', '')
 
-            if 'Akun Anda dibatasi' in text or 'account is restricted' in text.lower():
+            # Check for account restriction (language-agnostic patterns)
+            restriction_patterns = [
+                'restricted', 'dibatasi', 'restringido', 'eingeschränkt', 'restreint', 'limitado',
+                '"is_restricted":true', '"can_post":false'
+            ]
+            if any(p in text.lower() for p in restriction_patterns) and not safe_regex_search(r'"post_id":"(.*?)"', text):
                 return {
                     'status': 'failed',
                     'id': None,
