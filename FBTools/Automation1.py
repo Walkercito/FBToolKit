@@ -1,270 +1,1388 @@
-import re, json, urllib
-from .Tools import ConvertURL, GetData
+"""
+Facebook automation module for posting, commenting, reacting, and sharing.
 
-DefaultUAWindows = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36'
-HeadersGet  = lambda i=DefaultUAWindows : {'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7','Accept-Encoding':'gzip, deflate','Accept-Language':'en-US,en;q=0.9','Cache-Control':'max-age=0','Pragma':'akamai-x-cache-on, akamai-x-cache-remote-on, akamai-x-check-cacheable, akamai-x-get-cache-key, akamai-x-get-extracted-values, akamai-x-get-ssl-client-session-id, akamai-x-get-true-cache-key, akamai-x-serial-no, akamai-x-get-request-id,akamai-x-get-nonces,akamai-x-get-client-ip,akamai-x-feo-trace','Sec-Ch-Prefers-Color-Scheme':'light','Sec-Ch-Ua':'','Sec-Ch-Ua-Full-Version-List':'','Sec-Ch-Ua-Mobile':'?0','Sec-Ch-Ua-Platform':'','Sec-Ch-Ua-Platform-Version':'','Sec-Fetch-Dest':'document','Sec-Fetch-Mode':'navigate','Sec-Fetch-Site':'same-origin','Sec-Fetch-User':'?1','Upgrade-Insecure-Requests':'1','User-Agent':i,'Viewport-Width':'924'}
-HeadersPost = lambda i=DefaultUAWindows : {'Accept':'*/*','Accept-Encoding':'gzip, deflate','Accept-Language':'en-US,en;q=0.9','Content-Type':'application/x-www-form-urlencoded','Origin':'https://www.facebook.com','Sec-Ch-Prefers-Color-Scheme':'dark','Sec-Ch-Ua':'','Sec-Ch-Ua-Full-Version-List':'','Sec-Ch-Ua-Mobile':'?0','Sec-Ch-Ua-Model':'','Sec-Ch-Ua-Platform':'','Sec-Ch-Ua-Platform-Version':'','Sec-Fetch-Dest':'empty','Sec-Fetch-Mode':'cors','Sec-Fetch-Site':'same-origin','User-Agent':i}
+This module provides classes for automating various Facebook interactions
+including posting to feeds and groups, commenting, reacting, and sharing.
+"""
 
-class PostToFeed():
+import re
+import json
+import logging
+import mimetypes
+import urllib.request
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Union
 
-    def __init__(self, r=False, cookie=False, group=None, text=None, url=None, tag=None, privacy=None):
+from .Tools import convert_url, get_session_data, safe_regex_search, safe_regex_findall
+from .constants import (
+    get_headers_get,
+    get_headers_post,
+    ENDPOINTS,
+    DOC_IDS,
+    REACTIONS,
+    PRIVACY_LEVELS,
+    IMAGE_DOWNLOAD_TIMEOUT,
+)
+from .exceptions import (
+    ValidationError,
+    PostError,
+    GroupPostError,
+    ImageUploadError,
+    CommentError,
+    ReactionError,
+    ShareError,
+    RateLimitError,
+    SessionError,
+)
 
-        self.r = r
-        self.cookie = cookie
-        try: self.req = self.r.get('https://web.facebook.com/', headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+logger = logging.getLogger('FBTools')
 
-        if text == None: self.text = ''
-        else: self.text = text
 
-        if url == None: self.attachments = []
-        else:
-            self.attachments = []
-            for pt in url: self.UploadPhoto(pt)
+def load_image(source: str, timeout: int = IMAGE_DOWNLOAD_TIMEOUT) -> tuple:
+    """
+    Load an image from a URL or local file path.
 
-        if tag == None: self.tag = []
-        else: self.tag = tag
+    Supports loading images from:
+    - HTTP/HTTPS URLs (including Imgur, direct image links, etc.)
+    - Local file paths
 
-        if   privacy == None: self.privacy = 'EVERYONE'
-        elif privacy == 1:    self.privacy = 'EVERYONE'
-        elif privacy == 2:    self.privacy = 'FRIENDS'
-        elif privacy == 3:    self.privacy = 'SELF'
-        else:                 self.privacy = 'SELF'
-    
-    def UploadPhoto(self, url):
+    Args:
+        source: URL or file path to the image.
+        timeout: Timeout in seconds for URL downloads (default: 30).
+
+    Returns:
+        Tuple of (image_bytes, filename, content_type).
+
+    Raises:
+        ImageUploadError: If the image cannot be loaded.
+
+    Example:
+        >>> data, name, ctype = load_image('https://i.imgur.com/example.jpg')
+        >>> data, name, ctype = load_image('/path/to/image.png')
+    """
+    source = str(source).strip()
+
+    # Check if it's a URL
+    if source.startswith(('http://', 'https://')):
         try:
-            file = {'file':('image.jpg',urllib.request.urlopen(url).read())}
-            Data = self.Data.copy()
-            Data.update({'source':'8','profile_id':Data['__user'],'waterfallxapp':'comet','upload_id':'jsc_c_1g'})
-            pos = self.r.post('https://upload.facebook.com/ajax/react_composer/attachments/photo/upload',data=Data,files=file,cookies={'cookie':self.cookie},allow_redirects=True).text
-            idf = re.search('"photoID":"(.*?)"',str(pos)).group(1)
-            self.attachments.append({"photo":{"id":idf}})
-        except Exception as e: pass
+            logger.debug(f"Downloading image from URL: {source}")
+            request = urllib.request.Request(
+                source,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                image_data = response.read()
+                content_type = response.headers.get('Content-Type', 'image/jpeg')
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','id':None,'message':'cookie invalid'}
-        else:
-            try:
-                sessionid = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                Var = {"input":{"composer_entry_point":"inline_composer","composer_source_surface":"timeline","idempotence_token":"%s_FEED"%(sessionid),"source":"WWW","attachments":self.attachments,"audience":{"privacy":{"allow":[],"base_state":self.privacy,"deny":[],"tag_expansion_state":"UNSPECIFIED"}},"message":{"ranges":[],"text":self.text},"with_tags_ids":self.tag,"inline_activities":[],"explicit_place_id":"0","text_format_preset_id":"0","logging":{"composer_session_id":sessionid},"navigation_data":{"attribution_id_v2":"ProfileCometTimelineListViewRoot.react,comet.profile.timeline.list,via_cold_start,1703620101353,887511,190055527696468,,"},"tracking":[None],"event_share_metadata":{"surface":"newsfeed"},"actor_id":self.Data['__user'],"client_mutation_id":"1"},"displayCommentsFeedbackContext":None,"displayCommentsContextEnableComment":None,"displayCommentsContextIsAdPreview":None,"displayCommentsContextIsAggregatedShare":None,"displayCommentsContextIsStorySet":None,"feedLocation":"TIMELINE","feedbackSource":0,"focusCommentID":None,"gridMediaWidth":230,"groupID":None,"scale":1.5,"privacySelectorRenderLocation":"COMET_STREAM","checkPhotosToReelsUpsellEligibility":True,"renderLocation":"timeline","useDefaultActor":False,"inviteShortLinkKey":None,"isFeed":False,"isFundraiser":False,"isFunFactPost":False,"isGroup":False,"isEvent":False,"isTimeline":True,"isSocialLearning":False,"isPageNewsFeed":False,"isProfileReviews":False,"isWorkSharedDraft":False,"UFI2CommentsProvider_commentsKey":"ProfileCometTimelineRoute","hashtag":None,"canUserManageOffers":False,"__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider":False,"__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider":False,"__relay_internal__pv__IsWorkUserrelayprovider":False,"__relay_internal__pv__IsMergQAPollsrelayprovider":False,"__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider":False,"__relay_internal__pv__StoriesRingrelayprovider":False}
-                self.Data.update({'fb_api_caller_class':'RelayModern','fb_api_req_friendly_name': 'ComposerStoryCreateMutation','variables':json.dumps(Var),'server_timestamps':True,'doc_id':'7338317599553815'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text
-                if 'Status Baru Duplikat' in str(pos): tur = {'status':'failed','id':None,'message':"Don't Create Same/Duplicate Post"}
-                else: tur = {'status':'success','id':re.search('"post_id":"(.*?)"',str(pos)).group(1),'message':None}
-            except Exception as e: tur = {'status':'failed','id':None,'message':'Terjadi Kesalahan'}
-        return(tur)
+                # Determine filename from URL or content type
+                url_path = source.split('?')[0]
+                filename = url_path.split('/')[-1]
 
-class PostToGroup():
+                # If filename has no extension, add one based on content type
+                if '.' not in filename:
+                    ext = mimetypes.guess_extension(content_type.split(';')[0]) or '.jpg'
+                    filename = f'image{ext}'
 
-    def __init__(self, r=False, cookie=False, group=None, text=None, url=None, tag=None, privacy=None):
+                logger.debug(f"Downloaded image: {filename} ({len(image_data)} bytes)")
+                return image_data, filename, content_type
 
-        self.r = r
-        self.cookie = cookie
-        try: self.req = self.r.get('https://web.facebook.com/', headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+        except urllib.error.URLError as e:
+            raise ImageUploadError(f"Failed to download image from URL: {e}")
+        except TimeoutError:
+            raise ImageUploadError(f"Timeout downloading image from: {source}")
+        except Exception as e:
+            raise ImageUploadError(f"Error loading image from URL: {e}")
 
-        if group == None: exit("\nParameter 'group' Must Be Included\n")
-        else: self.group = group
+    # Check if it's a local file
+    else:
+        file_path = Path(source)
+        if not file_path.exists():
+            raise ImageUploadError(f"File not found: {source}")
 
-        if text == None: self.text = ''
-        else: self.text = text
+        if not file_path.is_file():
+            raise ImageUploadError(f"Path is not a file: {source}")
 
-        if url == None: self.attachments = []
-        else:
-            self.attachments = []
-            for pt in url: self.UploadPhoto(pt)
-
-        if tag == None: self.tag = []
-        else: self.tag = tag
-    
-    def UploadPhoto(self, url):
         try:
-            file = {'file':('image.jpg',urllib.request.urlopen(url).read())}
-            Data = self.Data.copy()
-            Data.update({'source':'8','profile_id':Data['__user'],'waterfallxapp':'comet','upload_id':'jsc_c_1g'})
-            pos = self.r.post('https://upload.facebook.com/ajax/react_composer/attachments/photo/upload',data=Data,files=file,cookies={'cookie':self.cookie},allow_redirects=True).text
-            idf = re.search('"photoID":"(.*?)"',str(pos)).group(1)
-            self.attachments.append({"photo":{"id":idf}})
-        except Exception as e: pass
+            logger.debug(f"Loading image from file: {source}")
+            image_data = file_path.read_bytes()
+            filename = file_path.name
+            content_type = mimetypes.guess_type(source)[0] or 'image/jpeg'
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','id':None,'message':'cookie invalid'}
-        else:
-            try:
-                sessionid = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                Var = {"input":{"composer_entry_point":"publisher_bar_media","composer_source_surface":"group","composer_type":"group","logging":{"composer_session_id":sessionid},"source":"WWW","attachments":self.attachments,"message":{"ranges":[],"text":self.text},"with_tags_ids":self.tag,"inline_activities":[],"explicit_place_id":"0","text_format_preset_id":"0","navigation_data":{"attribution_id_v2":"CometGroupDiscussionRoot.react,comet.group,unexpected,1703627156789,472005,2361831622,,;GroupsCometPeopleRoot.react,comet.group.admin.people,unexpected,1703627121338,335432,,,;CometGroupDiscussionRoot.react,comet.group,via_cold_start,1703627109831,115805,2361831622,,"},"tracking":[None],"event_share_metadata":{"surface":"newsfeed"},"audience":{"to_id":self.group},"actor_id":self.Data['__user'],"client_mutation_id":"1"},"displayCommentsFeedbackContext":None,"displayCommentsContextEnableComment":None,"displayCommentsContextIsAdPreview":None,"displayCommentsContextIsAggregatedShare":None,"displayCommentsContextIsStorySet":None,"feedLocation":"GROUP","feedbackSource":0,"focusCommentID":None,"gridMediaWidth":None,"groupID":None,"scale":1.5,"privacySelectorRenderLocation":"COMET_STREAM","checkPhotosToReelsUpsellEligibility":False,"renderLocation":"group","useDefaultActor":False,"inviteShortLinkKey":None,"isFeed":False,"isFundraiser":False,"isFunFactPost":False,"isGroup":True,"isEvent":False,"isTimeline":False,"isSocialLearning":False,"isPageNewsFeed":False,"isProfileReviews":False,"isWorkSharedDraft":False,"UFI2CommentsProvider_commentsKey":"CometGroupDiscussionRootSuccessQuery","hashtag":None,"canUserManageOffers":False,"__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider":False,"__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider":False,"__relay_internal__pv__IsWorkUserrelayprovider":False,"__relay_internal__pv__IsMergQAPollsrelayprovider":False,"__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider":False,"__relay_internal__pv__StoriesRingrelayprovider":False}
-                self.Data.update({'fb_api_caller_class':'RelayModern','fb_api_req_friendly_name': 'ComposerStoryCreateMutation','variables':json.dumps(Var),'server_timestamps':True,'doc_id':'7338317599553815'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text.replace('\\','')
-                if 'Akun Anda dibatasi saat ini' in str(pos): tur = {'status':'failed','id':None,'message':'Your Account Restricted To Post In Group'}
-                else:
-                    idpost = re.search('"post_id":"(.*?)"',str(pos)).group(1)
-                    if 'pending_posts/%s'%(idpost) in str(pos): tur = {'status':'pending','id':idpost,'message':'Pending Post'}
-                    else: tur = {'status':'success','id':idpost,'message':None}
-            except Exception as e: tur = {'status':'failed','id':None,'message':'Terjadi Kesalahan'}
-        return(tur)
+            logger.debug(f"Loaded image: {filename} ({len(image_data)} bytes)")
+            return image_data, filename, content_type
 
-class CommentToPost():
+        except PermissionError:
+            raise ImageUploadError(f"Permission denied reading file: {source}")
+        except Exception as e:
+            raise ImageUploadError(f"Error reading file: {e}")
 
-    def __init__(self, r=False, cookie=False, post=None, text=None, photo=None, tag=None):
+
+class PostToFeed:
+    """
+    Create a post on the user's personal feed/timeline.
+
+    Supports text posts with optional images and friend tags.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        group: Unused parameter (kept for API compatibility).
+        text: Post text content (optional).
+        url: List of image URLs or file paths to attach (optional).
+        tag: List of friend IDs to tag (optional).
+        privacy: Privacy level - 1=EVERYONE, 2=FRIENDS, 3=SELF (optional).
+
+    Example:
+        >>> post = PostToFeed(r=session, cookie=cookie, text="Hello World!")
+        >>> result = post.Execute()
+        >>> print(result['status'])  # 'success' or 'failed'
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        group=None,
+        text: str = None,
+        url: List[str] = None,
+        tag: List[str] = None,
+        privacy: int = None
+    ):
+        self.r = r
+        self.cookie = cookie
+        self.text = text or ''
+        self.tag = tag or []
+        self.attachments = []
+        self.upload_errors = []
+
+        # Set privacy level
+        self.privacy = PRIVACY_LEVELS.get(privacy, 'EVERYONE')
+
+        # Get session data
+        try:
+            self.req = self.r.get(
+                ENDPOINTS['base'] + '/',
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch session: {e}")
+            self.req = None
+
+        self.Data = get_session_data(self.req) if self.req else {}
+
+        # Upload images if provided
+        if url:
+            for image_source in url:
+                self._upload_photo(image_source)
+
+    def _upload_photo(self, source: str) -> bool:
+        """
+        Upload a photo for attachment.
+
+        Args:
+            source: Image URL or local file path.
+
+        Returns:
+            True if upload succeeded, False otherwise.
+        """
+        try:
+            image_data, filename, content_type = load_image(source)
+            file = {'file': (filename, image_data, content_type)}
+
+            data = self.Data.copy()
+            data.update({
+                'source': '8',
+                'profile_id': data.get('__user', ''),
+                'waterfallxapp': 'comet',
+                'upload_id': 'jsc_c_1g'
+            })
+
+            response = self.r.post(
+                ENDPOINTS['upload_photo'],
+                data=data,
+                files=file,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+
+            photo_id = safe_regex_search(r'"photoID":"(.*?)"', response)
+            if photo_id:
+                self.attachments.append({"photo": {"id": photo_id}})
+                logger.info(f"Uploaded photo: {filename} (ID: {photo_id})")
+                return True
+            else:
+                error_msg = f"Failed to get photo ID after upload: {filename}"
+                logger.warning(error_msg)
+                self.upload_errors.append(error_msg)
+                return False
+
+        except ImageUploadError as e:
+            error_msg = str(e)
+            logger.error(f"Image upload failed: {error_msg}")
+            self.upload_errors.append(error_msg)
+            return False
+        except Exception as e:
+            error_msg = f"Unexpected error uploading {source}: {e}"
+            logger.error(error_msg)
+            self.upload_errors.append(error_msg)
+            return False
+
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the post creation.
+
+        Returns:
+            Dictionary with keys:
+            - status: 'success' or 'failed'
+            - id: Post ID if successful, None otherwise
+            - message: Error message if failed, None otherwise
+            - upload_errors: List of image upload errors (if any)
+        """
+        if not self.r or not self.cookie:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Invalid session: cookie is required',
+                'upload_errors': self.upload_errors
+            }
+
+        if not self.Data:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Failed to extract session data',
+                'upload_errors': self.upload_errors
+            }
+
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            if not session_id:
+                raise SessionError("Could not extract session ID")
+
+            variables = {
+                "input": {
+                    "composer_entry_point": "inline_composer",
+                    "composer_source_surface": "timeline",
+                    "idempotence_token": f"{session_id}_FEED",
+                    "source": "WWW",
+                    "attachments": self.attachments,
+                    "audience": {
+                        "privacy": {
+                            "allow": [],
+                            "base_state": self.privacy,
+                            "deny": [],
+                            "tag_expansion_state": "UNSPECIFIED"
+                        }
+                    },
+                    "message": {"ranges": [], "text": self.text},
+                    "with_tags_ids": self.tag,
+                    "inline_activities": [],
+                    "explicit_place_id": "0",
+                    "text_format_preset_id": "0",
+                    "logging": {"composer_session_id": session_id},
+                    "navigation_data": {
+                        "attribution_id_v2": "ProfileCometTimelineListViewRoot.react,comet.profile.timeline.list,via_cold_start,1703620101353,887511,190055527696468,,"
+                    },
+                    "tracking": [None],
+                    "event_share_metadata": {"surface": "newsfeed"},
+                    "actor_id": self.Data['__user'],
+                    "client_mutation_id": "1"
+                },
+                "displayCommentsFeedbackContext": None,
+                "displayCommentsContextEnableComment": None,
+                "displayCommentsContextIsAdPreview": None,
+                "displayCommentsContextIsAggregatedShare": None,
+                "displayCommentsContextIsStorySet": None,
+                "feedLocation": "TIMELINE",
+                "feedbackSource": 0,
+                "focusCommentID": None,
+                "gridMediaWidth": 230,
+                "groupID": None,
+                "scale": 1.5,
+                "privacySelectorRenderLocation": "COMET_STREAM",
+                "checkPhotosToReelsUpsellEligibility": True,
+                "renderLocation": "timeline",
+                "useDefaultActor": False,
+                "inviteShortLinkKey": None,
+                "isFeed": False,
+                "isFundraiser": False,
+                "isFunFactPost": False,
+                "isGroup": False,
+                "isEvent": False,
+                "isTimeline": True,
+                "isSocialLearning": False,
+                "isPageNewsFeed": False,
+                "isProfileReviews": False,
+                "isWorkSharedDraft": False,
+                "UFI2CommentsProvider_commentsKey": "ProfileCometTimelineRoute",
+                "hashtag": None,
+                "canUserManageOffers": False,
+                "__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider": False,
+                "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+                "__relay_internal__pv__IsWorkUserrelayprovider": False,
+                "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+                "__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider": False,
+                "__relay_internal__pv__StoriesRingrelayprovider": False
+            }
+
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'ComposerStoryCreateMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['composer_create']
+            })
+
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+
+            # Check for duplicate post error
+            if 'Status Baru Duplikat' in response or 'duplicate' in response.lower():
+                return {
+                    'status': 'failed',
+                    'id': None,
+                    'message': 'Duplicate post detected - cannot create identical post',
+                    'upload_errors': self.upload_errors
+                }
+
+            # Extract post ID
+            post_id = safe_regex_search(r'"post_id":"(.*?)"', response)
+            if post_id:
+                logger.info(f"Post created successfully: {post_id}")
+                return {
+                    'status': 'success',
+                    'id': post_id,
+                    'message': None,
+                    'upload_errors': self.upload_errors if self.upload_errors else None
+                }
+
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Failed to create post - no post ID in response',
+                'upload_errors': self.upload_errors
+            }
+
+        except SessionError as e:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': str(e),
+                'upload_errors': self.upload_errors
+            }
+        except Exception as e:
+            logger.error(f"Post creation failed: {e}")
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': f'An error occurred: {e}',
+                'upload_errors': self.upload_errors
+            }
+
+
+class PostToGroup:
+    """
+    Create a post in a Facebook group.
+
+    Supports text posts with optional images and friend tags.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        group: Group ID (required).
+        text: Post text content (optional).
+        url: List of image URLs or file paths to attach (optional).
+        tag: List of friend IDs to tag (optional).
+        privacy: Unused for groups (group privacy applies).
+
+    Raises:
+        ValidationError: If group ID is not provided.
+
+    Example:
+        >>> post = PostToGroup(r=session, cookie=cookie, group="123456", text="Hello Group!")
+        >>> result = post.Execute()
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        group: str = None,
+        text: str = None,
+        url: List[str] = None,
+        tag: List[str] = None,
+        privacy: int = None
+    ):
+        if not group:
+            raise ValidationError("Parameter 'group' is required for PostToGroup")
 
         self.r = r
         self.cookie = cookie
-        self.url = ConvertURL(post)
-        try: self.req = self.r.get(self.url, headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+        self.group = str(group)
+        self.text = text or ''
+        self.tag = tag or []
+        self.attachments = []
+        self.upload_errors = []
 
-        if text == None: self.text = ''
-        else: self.text = text
+        # Get session data
+        try:
+            self.req = self.r.get(
+                ENDPOINTS['base'] + '/',
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch session: {e}")
+            self.req = None
 
-        if photo == None: self.photo = []
-        else: self.photo = self.UploadPhoto(photo)
+        self.Data = get_session_data(self.req) if self.req else {}
 
-        if tag == None: self.tag = []
+        # Upload images if provided
+        if url:
+            for image_source in url:
+                self._upload_photo(image_source)
+
+    def _upload_photo(self, source: str) -> bool:
+        """Upload a photo for attachment."""
+        try:
+            image_data, filename, content_type = load_image(source)
+            file = {'file': (filename, image_data, content_type)}
+
+            data = self.Data.copy()
+            data.update({
+                'source': '8',
+                'profile_id': data.get('__user', ''),
+                'waterfallxapp': 'comet',
+                'upload_id': 'jsc_c_1g'
+            })
+
+            response = self.r.post(
+                ENDPOINTS['upload_photo'],
+                data=data,
+                files=file,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+
+            photo_id = safe_regex_search(r'"photoID":"(.*?)"', response)
+            if photo_id:
+                self.attachments.append({"photo": {"id": photo_id}})
+                logger.info(f"Uploaded photo: {filename} (ID: {photo_id})")
+                return True
+            else:
+                error_msg = f"Failed to get photo ID after upload: {filename}"
+                logger.warning(error_msg)
+                self.upload_errors.append(error_msg)
+                return False
+
+        except ImageUploadError as e:
+            error_msg = str(e)
+            logger.error(f"Image upload failed: {error_msg}")
+            self.upload_errors.append(error_msg)
+            return False
+        except Exception as e:
+            error_msg = f"Unexpected error uploading {source}: {e}"
+            logger.error(error_msg)
+            self.upload_errors.append(error_msg)
+            return False
+
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the group post creation.
+
+        Returns:
+            Dictionary with keys:
+            - status: 'success', 'pending', or 'failed'
+            - id: Post ID if successful, None otherwise
+            - message: Status message or error description
+            - upload_errors: List of image upload errors (if any)
+        """
+        if not self.r or not self.cookie:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Invalid session: cookie is required',
+                'upload_errors': self.upload_errors
+            }
+
+        if not self.Data:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Failed to extract session data',
+                'upload_errors': self.upload_errors
+            }
+
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            if not session_id:
+                raise SessionError("Could not extract session ID")
+
+            variables = {
+                "input": {
+                    "composer_entry_point": "publisher_bar_media",
+                    "composer_source_surface": "group",
+                    "composer_type": "group",
+                    "logging": {"composer_session_id": session_id},
+                    "source": "WWW",
+                    "attachments": self.attachments,
+                    "message": {"ranges": [], "text": self.text},
+                    "with_tags_ids": self.tag,
+                    "inline_activities": [],
+                    "explicit_place_id": "0",
+                    "text_format_preset_id": "0",
+                    "navigation_data": {
+                        "attribution_id_v2": "CometGroupDiscussionRoot.react,comet.group,unexpected,1703627156789,472005,2361831622,,;GroupsCometPeopleRoot.react,comet.group.admin.people,unexpected,1703627121338,335432,,,;CometGroupDiscussionRoot.react,comet.group,via_cold_start,1703627109831,115805,2361831622,,"
+                    },
+                    "tracking": [None],
+                    "event_share_metadata": {"surface": "newsfeed"},
+                    "audience": {"to_id": self.group},
+                    "actor_id": self.Data['__user'],
+                    "client_mutation_id": "1"
+                },
+                "displayCommentsFeedbackContext": None,
+                "displayCommentsContextEnableComment": None,
+                "displayCommentsContextIsAdPreview": None,
+                "displayCommentsContextIsAggregatedShare": None,
+                "displayCommentsContextIsStorySet": None,
+                "feedLocation": "GROUP",
+                "feedbackSource": 0,
+                "focusCommentID": None,
+                "gridMediaWidth": None,
+                "groupID": None,
+                "scale": 1.5,
+                "privacySelectorRenderLocation": "COMET_STREAM",
+                "checkPhotosToReelsUpsellEligibility": False,
+                "renderLocation": "group",
+                "useDefaultActor": False,
+                "inviteShortLinkKey": None,
+                "isFeed": False,
+                "isFundraiser": False,
+                "isFunFactPost": False,
+                "isGroup": True,
+                "isEvent": False,
+                "isTimeline": False,
+                "isSocialLearning": False,
+                "isPageNewsFeed": False,
+                "isProfileReviews": False,
+                "isWorkSharedDraft": False,
+                "UFI2CommentsProvider_commentsKey": "CometGroupDiscussionRootSuccessQuery",
+                "hashtag": None,
+                "canUserManageOffers": False,
+                "__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider": False,
+                "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+                "__relay_internal__pv__IsWorkUserrelayprovider": False,
+                "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+                "__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider": False,
+                "__relay_internal__pv__StoriesRingrelayprovider": False
+            }
+
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'ComposerStoryCreateMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['composer_create']
+            })
+
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text.replace('\\', '')
+
+            # Check for account restriction
+            if 'Akun Anda dibatasi' in response or 'account is restricted' in response.lower():
+                logger.warning("Account is restricted from posting to groups")
+                return {
+                    'status': 'failed',
+                    'id': None,
+                    'message': 'Your account is currently restricted from posting to groups',
+                    'upload_errors': self.upload_errors
+                }
+
+            # Extract post ID
+            post_id = safe_regex_search(r'"post_id":"(.*?)"', response)
+            if post_id:
+                # Check if post is pending approval
+                if f'pending_posts/{post_id}' in response:
+                    logger.info(f"Post pending approval: {post_id}")
+                    return {
+                        'status': 'pending',
+                        'id': post_id,
+                        'message': 'Post is pending admin approval',
+                        'upload_errors': self.upload_errors if self.upload_errors else None
+                    }
+
+                logger.info(f"Group post created successfully: {post_id}")
+                return {
+                    'status': 'success',
+                    'id': post_id,
+                    'message': None,
+                    'upload_errors': self.upload_errors if self.upload_errors else None
+                }
+
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': 'Failed to create post - no post ID in response',
+                'upload_errors': self.upload_errors
+            }
+
+        except SessionError as e:
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': str(e),
+                'upload_errors': self.upload_errors
+            }
+        except Exception as e:
+            logger.error(f"Group post creation failed: {e}")
+            return {
+                'status': 'failed',
+                'id': None,
+                'message': f'An error occurred: {e}',
+                'upload_errors': self.upload_errors
+            }
+
+
+class CommentToPost:
+    """
+    Add a comment to a Facebook post.
+
+    Supports text comments with optional photo and user tags.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        post: Post URL or ID to comment on.
+        text: Comment text content (optional).
+        photo: Photo URL or file path to attach (optional).
+        tag: List of user IDs to tag (optional).
+
+    Example:
+        >>> comment = CommentToPost(r=session, cookie=cookie, post="123456", text="Nice post!")
+        >>> result = comment.Execute()
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        post: str = None,
+        text: str = None,
+        photo: str = None,
+        tag: List[str] = None
+    ):
+        self.r = r
+        self.cookie = cookie
+        self.url = convert_url(post)
+        self.text = text or ''
+        self.photo = []
+        self.upload_error = None
+
+        # Format tags
+        if tag:
+            self.tag = [{"entity": {"id": i}, "length": 100, "offset": 100} for i in tag]
         else:
             self.tag = []
-            for i in tag: self.tag.append({"entity":{"id":i},"length":100,"offset":100})
 
-    def UploadPhoto(self, url):
+        # Get session data
         try:
+            self.req = self.r.get(
+                self.url,
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch post: {e}")
+            self.req = None
+
+        self.Data = get_session_data(self.req) if self.req else {}
+
+        # Upload photo if provided
+        if photo:
+            self._upload_photo(photo)
+
+    def _upload_photo(self, source: str) -> bool:
+        """Upload a photo for the comment."""
+        try:
+            image_data, filename, content_type = load_image(source)
+            file = {'file': (filename, image_data, content_type)}
+
             data = self.Data.copy()
-            file = {'file':('image.jpg',urllib.request.urlopen(url).read())}
-            data.update({'source':'8','profile_id':data['__user'],'waterfallxapp':'comet','upload_id':'jsc_c_1g'})
-            pos = self.r.post('https://web.facebook.com/ajax/ufi/upload/',data=data,files=file,cookies={'cookie':self.cookie},allow_redirects=True).text
-            idf = re.search('"fbid":(.*?),',str(pos)).group(1)
-            return([{"media":{"id":idf}}])
-        except Exception as e: return([])
+            data.update({
+                'source': '8',
+                'profile_id': data.get('__user', ''),
+                'waterfallxapp': 'comet',
+                'upload_id': 'jsc_c_1g'
+            })
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','id':None,'message':'cookie invalid'}
-        else:
-            try:
-                session_id = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                client_id = re.search('"clientID":"(.*?)"',str(self.req)).group(1)
-                try: feedback_id = re.search('"feedback":{"associated_group":null,"id":"(.*?)"},"is_story_civic":null',str(self.req)).group(1)
-                except Exception as e: feedback_id = re.findall('"feedback_id":"(.*?)"',str(self.req))[-1]
-                try: tracking = re.findall('{"action_link":null,"badge":null,"follow_button":null},"encrypted_tracking":"(.*?)"},"__module_operation_CometFeedStoryTitleSection_story"',str(self.req))[-1]
-                except Exception as e: tracking = re.findall('"encrypted_tracking":"(.*?)"',str(self.req))[0]
-                Vir = {"assistant_caller":"comet_above_composer","conversation_guide_session_id":session_id,"conversation_guide_shown":None}
-                Var = {"feedLocation":"PERMALINK","feedbackSource":2,"groupID":None,"input":{"client_mutation_id":"1","actor_id":self.Data['__user'],"attachments":self.photo,"feedback_id":feedback_id,"formatting_style":None,"message":{"ranges":self.tag,"text":self.text},"attribution_id_v2":"CometSinglePostRoot.react,comet.post.single,via_cold_start,1703691784875,275571,,,","vod_video_timestamp":None,"is_tracking_encrypted":True,"tracking":[tracking,json.dumps(Vir)],"feedback_source":"OBJECT","idempotence_token":"client:%s"%(client_id),"session_id":session_id},"inviteShortLinkKey":None,"renderLocation":None,"scale":1.5,"useDefaultActor":False,"focusCommentID":None}
-                self.Data.update({'fb_api_caller_class':'RelayModern','fb_api_req_friendly_name':'useCometUFICreateCommentMutation','variables':json.dumps(Var),'server_timestamps':True,'doc_id':'7128740410521626'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text
-                if '"data":{"comment_create":{"feedback"' in str(pos): tur = {'status':'success','id':re.search('comment_id=(.*?)"',str(pos)).group(1),'message':None}
-                else: tur = {'status':'failed','id':None,'message':'Spam Or Something Else'}
-            except Exception as e: tur = {'status':'failed','id':None,'message':'Terjadi Kesalahan'}
-        return(tur)
+            response = self.r.post(
+                ENDPOINTS['upload_comment_photo'],
+                data=data,
+                files=file,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
 
-class ReactToPost():
+            photo_id = safe_regex_search(r'"fbid":(.*?),', response)
+            if photo_id:
+                self.photo = [{"media": {"id": photo_id}}]
+                logger.info(f"Uploaded comment photo (ID: {photo_id})")
+                return True
+            else:
+                self.upload_error = f"Failed to get photo ID: {filename}"
+                logger.warning(self.upload_error)
+                return False
 
-    def __init__(self, r=False, cookie=False, post=None, react=None):
-    
+        except ImageUploadError as e:
+            self.upload_error = str(e)
+            logger.error(f"Comment photo upload failed: {self.upload_error}")
+            return False
+        except Exception as e:
+            self.upload_error = f"Unexpected error: {e}"
+            logger.error(self.upload_error)
+            return False
+
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the comment creation.
+
+        Returns:
+            Dictionary with keys:
+            - status: 'success' or 'failed'
+            - id: Comment ID if successful, None otherwise
+            - message: Error message if failed, None otherwise
+        """
+        if not self.r or not self.cookie:
+            return {'status': 'failed', 'id': None, 'message': 'Invalid session: cookie is required'}
+
+        if not self.Data:
+            return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
+
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            client_id = safe_regex_search(r'"clientID":"(.*?)"', self.req)
+
+            if not session_id or not client_id:
+                raise SessionError("Could not extract session/client ID")
+
+            # Extract feedback ID (post identifier)
+            feedback_id = safe_regex_search(
+                r'"feedback":\{"associated_group":null,"id":"(.*?)"\},"is_story_civic":null',
+                self.req
+            )
+            if not feedback_id:
+                feedback_id = safe_regex_findall(r'"feedback_id":"(.*?)"', self.req, index=-1)
+
+            if not feedback_id:
+                raise CommentError("Could not extract feedback ID from post")
+
+            # Extract tracking data
+            tracking = safe_regex_findall(
+                r'\{"action_link":null,"badge":null,"follow_button":null\},"encrypted_tracking":"(.*?)"\},"__module_operation_CometFeedStoryTitleSection_story"',
+                self.req, index=-1
+            )
+            if not tracking:
+                tracking = safe_regex_findall(r'"encrypted_tracking":"(.*?)"', self.req, index=0)
+
+            vir = {
+                "assistant_caller": "comet_above_composer",
+                "conversation_guide_session_id": session_id,
+                "conversation_guide_shown": None
+            }
+
+            variables = {
+                "feedLocation": "PERMALINK",
+                "feedbackSource": 2,
+                "groupID": None,
+                "input": {
+                    "client_mutation_id": "1",
+                    "actor_id": self.Data['__user'],
+                    "attachments": self.photo,
+                    "feedback_id": feedback_id,
+                    "formatting_style": None,
+                    "message": {"ranges": self.tag, "text": self.text},
+                    "attribution_id_v2": "CometSinglePostRoot.react,comet.post.single,via_cold_start,1703691784875,275571,,,",
+                    "vod_video_timestamp": None,
+                    "is_tracking_encrypted": True,
+                    "tracking": [tracking, json.dumps(vir)],
+                    "feedback_source": "OBJECT",
+                    "idempotence_token": f"client:{client_id}",
+                    "session_id": session_id
+                },
+                "inviteShortLinkKey": None,
+                "renderLocation": None,
+                "scale": 1.5,
+                "useDefaultActor": False,
+                "focusCommentID": None
+            }
+
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'useCometUFICreateCommentMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['comment_create']
+            })
+
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+
+            if '"data":{"comment_create":{"feedback"' in response:
+                comment_id = safe_regex_search(r'comment_id=(.*?)"', response)
+                logger.info(f"Comment created successfully: {comment_id}")
+                return {'status': 'success', 'id': comment_id, 'message': None}
+            else:
+                return {
+                    'status': 'failed',
+                    'id': None,
+                    'message': 'Comment may be flagged as spam or post has restrictions'
+                }
+
+        except (SessionError, CommentError) as e:
+            return {'status': 'failed', 'id': None, 'message': str(e)}
+        except Exception as e:
+            logger.error(f"Comment creation failed: {e}")
+            return {'status': 'failed', 'id': None, 'message': f'An error occurred: {e}'}
+
+
+class ReactToPost:
+    """
+    Add a reaction to a Facebook post.
+
+    Supported reactions: Like, Love, Haha, Wow, Care, Sad, Angry.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        post: Post URL or ID to react to.
+        react: Reaction type (1=Like, 2=Love, 3=Haha, 4=Wow, 5=Care, 6=Sad, 7=Angry).
+
+    Example:
+        >>> reaction = ReactToPost(r=session, cookie=cookie, post="123456", react=2)
+        >>> result = reaction.Execute()  # Adds 'Love' reaction
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        post: str = None,
+        react: int = None
+    ):
         self.r = r
         self.cookie = cookie
-        self.url = ConvertURL(post)
-        try: self.req = self.r.get(self.url, headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+        self.url = convert_url(post)
+        self.react = react or 1  # Default to Like
 
-        if react == None: self.react = 2
-        else: self.react = react
+        # Get session data
+        try:
+            self.req = self.r.get(
+                self.url,
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch post: {e}")
+            self.req = None
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','react_type':None,'message':'cookie invalid'}
-        else:
-            try:
-                react_type = ['Like','Love','Haha','Wow','Care','Sad','Angry'][self.react-1]
-                react      = ['1635855486666999','1678524932434102','115940658764963','478547315650144','613557422527858','908563459236466','444813342392137'][self.react-1]
-                session_id = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                try: feedback_id = re.search('"feedback":{"associated_group":null,"id":"(.*?)"},"is_story_civic":null',str(self.req)).group(1)
-                except Exception as e: feedback_id = re.findall('"feedback_id":"(.*?)"',str(self.req))[-1]
-                try: encrypted_tracking = re.findall('{"action_link":null,"badge":null,"follow_button":null},"encrypted_tracking":"(.*?)"},"__module_operation_CometFeedStoryTitleSection_story"',str(self.req))[-1]
-                except Exception as e: encrypted_tracking = re.findall('"encrypted_tracking":"(.*?)"',str(self.req))[0]
-                var = {"input":{"attribution_id_v2":"CometSinglePostRoot.react,comet.post.single,via_cold_start,1697303736286,689359,,","feedback_id":feedback_id,"feedback_reaction_id":react,"feedback_source":"OBJECT","is_tracking_encrypted":True,"tracking":[encrypted_tracking],"session_id":session_id,"actor_id":self.Data['__user'],"client_mutation_id":"1"},"useDefaultActor":False,"scale":1.5}
-                self.Data.update({'fb_api_caller_class':'RelayModern','fb_api_req_friendly_name':'CometUFIFeedbackReactMutation','variables':json.dumps(var),'server_timestamps':True,'doc_id':'6623712531077310'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text
-                if '"feedback_react":{"feedback":{"can_viewer_react":true' in str(pos): tur = {'status':'success','react_type':react_type,'message':None}
-                else: tur = {'status':'failed','react_type':react_type,'message':'Spam Or Something Else'}
-            except Exception as e: tur = {'status':'failed','react_type':react_type,'message':'Terjadi Kesalahan'}
-        return(tur)
+        self.Data = get_session_data(self.req) if self.req else {}
 
-class ShareToFeed():
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the reaction.
 
-    def __init__(self, r=False, cookie=False, post=None, group=None, text=None, tag=None, privacy=None):
+        Returns:
+            Dictionary with keys:
+            - status: 'success' or 'failed'
+            - react_type: Name of reaction (Like, Love, etc.)
+            - message: Error message if failed, None otherwise
+        """
+        reaction_info = REACTIONS.get(self.react, REACTIONS[1])
+        react_type = reaction_info['name']
+        react_id = reaction_info['id']
+
+        if not self.r or not self.cookie:
+            return {'status': 'failed', 'react_type': react_type, 'message': 'Invalid session: cookie is required'}
+
+        if not self.Data:
+            return {'status': 'failed', 'react_type': react_type, 'message': 'Failed to extract session data'}
+
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            if not session_id:
+                raise SessionError("Could not extract session ID")
+
+            # Extract feedback ID
+            feedback_id = safe_regex_search(
+                r'"feedback":\{"associated_group":null,"id":"(.*?)"\},"is_story_civic":null',
+                self.req
+            )
+            if not feedback_id:
+                feedback_id = safe_regex_findall(r'"feedback_id":"(.*?)"', self.req, index=-1)
+
+            if not feedback_id:
+                raise ReactionError("Could not extract feedback ID from post")
+
+            # Extract tracking data
+            encrypted_tracking = safe_regex_findall(
+                r'\{"action_link":null,"badge":null,"follow_button":null\},"encrypted_tracking":"(.*?)"\},"__module_operation_CometFeedStoryTitleSection_story"',
+                self.req, index=-1
+            )
+            if not encrypted_tracking:
+                encrypted_tracking = safe_regex_findall(r'"encrypted_tracking":"(.*?)"', self.req, index=0)
+
+            variables = {
+                "input": {
+                    "attribution_id_v2": "CometSinglePostRoot.react,comet.post.single,via_cold_start,1697303736286,689359,,",
+                    "feedback_id": feedback_id,
+                    "feedback_reaction_id": react_id,
+                    "feedback_source": "OBJECT",
+                    "is_tracking_encrypted": True,
+                    "tracking": [encrypted_tracking],
+                    "session_id": session_id,
+                    "actor_id": self.Data['__user'],
+                    "client_mutation_id": "1"
+                },
+                "useDefaultActor": False,
+                "scale": 1.5
+            }
+
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'CometUFIFeedbackReactMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['reaction']
+            })
+
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+
+            if '"feedback_react":{"feedback":{"can_viewer_react":true' in response:
+                logger.info(f"Reaction '{react_type}' added successfully")
+                return {'status': 'success', 'react_type': react_type, 'message': None}
+            else:
+                return {
+                    'status': 'failed',
+                    'react_type': react_type,
+                    'message': 'Failed to add reaction - may be spam or post has restrictions'
+                }
+
+        except (SessionError, ReactionError) as e:
+            return {'status': 'failed', 'react_type': react_type, 'message': str(e)}
+        except Exception as e:
+            logger.error(f"Reaction failed: {e}")
+            return {'status': 'failed', 'react_type': react_type, 'message': f'An error occurred: {e}'}
+
+
+class ShareToFeed:
+    """
+    Share a post to the user's personal feed.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        post: Post URL or ID to share.
+        group: Unused parameter (kept for API compatibility).
+        text: Additional text to add to share (optional).
+        tag: List of friend IDs to tag (optional).
+        privacy: Privacy level - 1=EVERYONE, 2=FRIENDS, 3=SELF (optional).
+
+    Example:
+        >>> share = ShareToFeed(r=session, cookie=cookie, post="123456", text="Check this out!")
+        >>> result = share.Execute()
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        post: str = None,
+        group=None,
+        text: str = None,
+        tag: List[str] = None,
+        privacy: int = None
+    ):
+        self.r = r
+        self.cookie = cookie
+        self.url = convert_url(post)
+        self.text = text or ''
+        self.tag = tag or []
+        self.privacy = PRIVACY_LEVELS.get(privacy, 'EVERYONE')
+
+        # Get session data
+        try:
+            self.req = self.r.get(
+                self.url,
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch post: {e}")
+            self.req = None
+
+        self.Data = get_session_data(self.req) if self.req else {}
+
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the share to feed.
+
+        Returns:
+            Dictionary with keys:
+            - status: 'success' or 'failed'
+            - id: Share post ID if successful, None otherwise
+            - message: Error message if failed, None otherwise
+        """
+        if not self.r or not self.cookie:
+            return {'status': 'failed', 'id': None, 'message': 'Invalid session: cookie is required'}
+
+        if not self.Data:
+            return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
+
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            share_fbid = safe_regex_search(r'"share_fbid":"(.*?)"', self.req)
+
+            if not session_id or not share_fbid:
+                raise SessionError("Could not extract session ID or share ID")
+
+            # Extract tracking data
+            tracking = safe_regex_findall(
+                r'\{"action_link":null,"badge":null,"follow_button":null\},"encrypted_tracking":"(.*?)"\},"__module_operation_CometFeedStoryTitleSection_story"',
+                self.req, index=-1
+            )
+            if not tracking:
+                tracking = safe_regex_findall(r'"encrypted_tracking":"(.*?)"', self.req, index=0)
+
+            variables = {
+                "input": {
+                    "composer_entry_point": "share_modal",
+                    "composer_source_surface": "feed_story",
+                    "composer_type": "share",
+                    "idempotence_token": f"{session_id}_FEED",
+                    "source": "WWW",
+                    "is_tracking_encrypted": True,
+                    "tracking": [tracking, None],
+                    "audience": {
+                        "privacy": {
+                            "allow": [],
+                            "base_state": self.privacy,
+                            "deny": [],
+                            "tag_expansion_state": "UNSPECIFIED"
+                        }
+                    },
+                    "message": {"ranges": [], "text": self.text},
+                    "inline_activities": [],
+                    "text_format_preset_id": "0",
+                    "attachments": [{
+                        "link": {
+                            "share_scrape_data": json.dumps({
+                                "share_type": 22,
+                                "share_params": [int(share_fbid)]
+                            })
+                        }
+                    }],
+                    "with_tags_ids": self.tag,
+                    "logging": {"composer_session_id": session_id},
+                    "navigation_data": {
+                        "attribution_id_v2": "CometSinglePostRoot.react,comet.post.single,via_cold_start,1703851502946,850033,,,"
+                    },
+                    "event_share_metadata": {"surface": "newsfeed"},
+                    "actor_id": self.Data['__user'],
+                    "client_mutation_id": "1"
+                },
+                "displayCommentsFeedbackContext": None,
+                "displayCommentsContextEnableComment": None,
+                "displayCommentsContextIsAdPreview": None,
+                "displayCommentsContextIsAggregatedShare": None,
+                "displayCommentsContextIsStorySet": None,
+                "feedLocation": "NEWSFEED",
+                "feedbackSource": 1,
+                "focusCommentID": None,
+                "gridMediaWidth": None,
+                "groupID": None,
+                "scale": 2,
+                "privacySelectorRenderLocation": "COMET_STREAM",
+                "checkPhotosToReelsUpsellEligibility": True,
+                "renderLocation": "homepage_stream",
+                "useDefaultActor": False,
+                "inviteShortLinkKey": None,
+                "isFeed": True,
+                "isFundraiser": False,
+                "isFunFactPost": False,
+                "isGroup": False,
+                "isEvent": False,
+                "isTimeline": False,
+                "isSocialLearning": False,
+                "isPageNewsFeed": False,
+                "isProfileReviews": False,
+                "isWorkSharedDraft": False,
+                "UFI2CommentsProvider_commentsKey": "CometModernHomeFeedQuery",
+                "hashtag": None,
+                "canUserManageOffers": False,
+                "__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider": False,
+                "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+                "__relay_internal__pv__IsWorkUserrelayprovider": False,
+                "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+                "__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider": False,
+                "__relay_internal__pv__StoriesRingrelayprovider": False
+            }
+
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'ComposerStoryCreateMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['composer_create']
+            })
+
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text.replace('\\', '')
+
+            # Check for errors
+            if 'Status Baru Duplikat' in response or 'duplicate' in response.lower():
+                return {'status': 'failed', 'id': None, 'message': 'Duplicate share detected'}
+
+            if 'Tidak Dapat Membagikan' in response or 'unable to share' in response.lower():
+                return {'status': 'failed', 'id': None, 'message': 'Unable to share - post may be deleted or private'}
+
+            # Extract post ID
+            post_id = safe_regex_search(r'"post_id":"(.*?)"', response)
+            if post_id:
+                logger.info(f"Shared to feed successfully: {post_id}")
+                return {'status': 'success', 'id': post_id, 'message': None}
+
+            return {'status': 'failed', 'id': None, 'message': 'Failed to share - no post ID in response'}
+
+        except SessionError as e:
+            return {'status': 'failed', 'id': None, 'message': str(e)}
+        except Exception as e:
+            logger.error(f"Share to feed failed: {e}")
+            return {'status': 'failed', 'id': None, 'message': f'An error occurred: {e}'}
+
+
+class ShareToGroup:
+    """
+    Share a post to a Facebook group.
+
+    Args:
+        r: Requests session object.
+        cookie: Facebook authentication cookie.
+        post: Post URL or ID to share.
+        group: Group ID to share to (required).
+        text: Additional text to add to share (optional).
+        tag: List of friend IDs to tag (optional).
+        privacy: Unused for groups (group privacy applies).
+
+    Raises:
+        ValidationError: If group ID is not provided.
+
+    Example:
+        >>> share = ShareToGroup(r=session, cookie=cookie, post="123456", group="789", text="Great content!")
+        >>> result = share.Execute()
+    """
+
+    def __init__(
+        self,
+        r=None,
+        cookie: str = None,
+        post: str = None,
+        group: str = None,
+        text: str = None,
+        tag: List[str] = None,
+        privacy: int = None
+    ):
+        if not group:
+            raise ValidationError("Parameter 'group' is required for ShareToGroup")
 
         self.r = r
         self.cookie = cookie
-        self.url = ConvertURL(post)
-        try: self.req = self.r.get(self.url, headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+        self.url = convert_url(post)
+        self.group = str(group)
+        self.text = text or ''
+        self.tag = tag or []
 
-        if text == None: self.text = ''
-        else: self.text = text
+        # Get session data
+        try:
+            self.req = self.r.get(
+                self.url,
+                headers=get_headers_get(),
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text
+        except Exception as e:
+            logger.error(f"Failed to fetch post: {e}")
+            self.req = None
 
-        if tag == None: self.tag = []
-        else: self.tag = tag
+        self.Data = get_session_data(self.req) if self.req else {}
 
-        if   privacy == None: self.privacy = 'EVERYONE'
-        elif privacy == 1:    self.privacy = 'EVERYONE'
-        elif privacy == 2:    self.privacy = 'FRIENDS'
-        elif privacy == 3:    self.privacy = 'SELF'
-        else:                 self.privacy = 'SELF'
+    def Execute(self) -> Dict[str, Any]:
+        """
+        Execute the share to group.
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','id':None,'message':'cookie invalid'}
-        else:
-            try:
-                sessionid = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                share_fbid = re.search('"share_fbid":"(.*?)"',str(self.req)).group(1)
-                try: tracking = re.findall('{"action_link":null,"badge":null,"follow_button":null},"encrypted_tracking":"(.*?)"},"__module_operation_CometFeedStoryTitleSection_story"',str(self.req))[-1]
-                except Exception as e: tracking = re.findall('"encrypted_tracking":"(.*?)"',str(self.req))[0]
-                Var = {"input":{"composer_entry_point":"share_modal","composer_source_surface":"feed_story","composer_type":"share","idempotence_token":"%s_FEED"%(sessionid),"source":"WWW","is_tracking_encrypted":True,"tracking":[tracking,None],"audience":{"privacy":{"allow":[],"base_state":self.privacy,"deny":[],"tag_expansion_state":"UNSPECIFIED"}},"message":{"ranges":[],"text":self.text},"inline_activities":[],"text_format_preset_id":"0","attachments":[{"link":{"share_scrape_data":json.dumps({"share_type":22,"share_params":[int(share_fbid)]})}}],"with_tags_ids":self.tag,"logging":{"composer_session_id":sessionid},"navigation_data":{"attribution_id_v2":"CometSinglePostRoot.react,comet.post.single,via_cold_start,1703851502946,850033,,,"},"event_share_metadata":{"surface":"newsfeed"},"actor_id":self.Data['__user'],"client_mutation_id":"1"},"displayCommentsFeedbackContext":None,"displayCommentsContextEnableComment":None,"displayCommentsContextIsAdPreview":None,"displayCommentsContextIsAggregatedShare":None,"displayCommentsContextIsStorySet":None,"feedLocation":"NEWSFEED","feedbackSource":1,"focusCommentID":None,"gridMediaWidth":None,"groupID":None,"scale":2,"privacySelectorRenderLocation":"COMET_STREAM","checkPhotosToReelsUpsellEligibility":True,"renderLocation":"homepage_stream","useDefaultActor":False,"inviteShortLinkKey":None,"isFeed":True,"isFundraiser":False,"isFunFactPost":False,"isGroup":False,"isEvent":False,"isTimeline":False,"isSocialLearning":False,"isPageNewsFeed":False,"isProfileReviews":False,"isWorkSharedDraft":False,"UFI2CommentsProvider_commentsKey":"CometModernHomeFeedQuery","hashtag":None,"canUserManageOffers":False,"__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider":False,"__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider":False,"__relay_internal__pv__IsWorkUserrelayprovider":False,"__relay_internal__pv__IsMergQAPollsrelayprovider":False,"__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider":False,"__relay_internal__pv__StoriesRingrelayprovider":False}
-                self.Data.update({'fb_api_caller_class': 'RelayModern','fb_api_req_friendly_name': 'ComposerStoryCreateMutation','variables':json.dumps(Var),'server_timestamps':True,'doc_id':'7338317599553815'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text.replace('\\','')
-                if 'Status Baru Duplikat' in str(pos): tur = {'status':'failed','id':None,'message':"Don't Create Same/Duplicate Post"}
-                elif 'Tidak Dapat Membagikan Postingan' in str(pos): tur = {'status':'failed','id':None,'message':'post has been deleted or there is an error'}
-                else: tur = {'status':'success','id':re.search('"post_id":"(.*?)"',str(pos)).group(1),'message':None}
-            except Exception as e: tur = {'status':'failed','id':None,'message':'Terjadi Kesalahan'}
-        return(tur)
+        Returns:
+            Dictionary with keys:
+            - status: 'success', 'pending', or 'failed'
+            - id: Share post ID if successful, None otherwise
+            - message: Status message or error description
+        """
+        if not self.r or not self.cookie:
+            return {'status': 'failed', 'id': None, 'message': 'Invalid session: cookie is required'}
 
-class ShareToGroup():
+        if not self.Data:
+            return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
 
-    def __init__(self, r=False, cookie=False, post=None, group=None, text=None, tag=None, privacy=None):
+        try:
+            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            share_fbid = safe_regex_search(r'"share_fbid":"(.*?)"', self.req)
 
-        self.r = r
-        self.cookie = cookie
-        self.url = ConvertURL(post)
-        try: self.req = self.r.get(self.url, headers=HeadersGet(), cookies={'cookie':self.cookie}, allow_redirects=True).text
-        except Exception as e: self.req = None
-        self.Data = GetData(self.req)
+            if not session_id or not share_fbid:
+                raise SessionError("Could not extract session ID or share ID")
 
-        if group == None: exit("\nParameter 'group' Must Be Included\n")
-        else: self.group = group
+            # Extract tracking data
+            tracking = safe_regex_findall(
+                r'\{"action_link":null,"badge":null,"follow_button":null\},"encrypted_tracking":"(.*?)"\},"__module_operation_CometFeedStoryTitleSection_story"',
+                self.req, index=-1
+            )
+            if not tracking:
+                tracking = safe_regex_findall(r'"encrypted_tracking":"(.*?)"', self.req, index=0)
 
-        if text == None: self.text = ''
-        else: self.text = text
+            variables = {
+                "input": {
+                    "composer_entry_point": "inline_composer",
+                    "composer_source_surface": "group",
+                    "composer_type": "group",
+                    "logging": {"composer_session_id": session_id},
+                    "source": "WWW",
+                    "is_tracking_encrypted": True,
+                    "tracking": [tracking, None],
+                    "attachments": [{
+                        "link": {
+                            "share_scrape_data": json.dumps({
+                                "share_type": 22,
+                                "share_params": [int(share_fbid)]
+                            })
+                        }
+                    }],
+                    "message": {"ranges": [], "text": self.text},
+                    "with_tags_ids": self.tag,
+                    "inline_activities": [],
+                    "explicit_place_id": "0",
+                    "text_format_preset_id": "0",
+                    "navigation_data": {
+                        "attribution_id_v2": "CometSinglePostRoot.react,comet.post.single,via_cold_start,1703874125062,522238,,,"
+                    },
+                    "event_share_metadata": {"surface": "newsfeed"},
+                    "audience": {"to_id": self.group},
+                    "actor_id": self.Data['__user'],
+                    "client_mutation_id": "1"
+                },
+                "displayCommentsFeedbackContext": None,
+                "displayCommentsContextEnableComment": None,
+                "displayCommentsContextIsAdPreview": None,
+                "displayCommentsContextIsAggregatedShare": None,
+                "displayCommentsContextIsStorySet": None,
+                "feedLocation": "GROUP",
+                "feedbackSource": 0,
+                "focusCommentID": None,
+                "gridMediaWidth": None,
+                "groupID": None,
+                "scale": 2,
+                "privacySelectorRenderLocation": "COMET_STREAM",
+                "checkPhotosToReelsUpsellEligibility": False,
+                "renderLocation": "group",
+                "useDefaultActor": False,
+                "inviteShortLinkKey": None,
+                "isFeed": False,
+                "isFundraiser": False,
+                "isFunFactPost": False,
+                "isGroup": True,
+                "isEvent": False,
+                "isTimeline": False,
+                "isSocialLearning": False,
+                "isPageNewsFeed": False,
+                "isProfileReviews": False,
+                "isWorkSharedDraft": False,
+                "UFI2CommentsProvider_commentsKey": None,
+                "hashtag": None,
+                "canUserManageOffers": False,
+                "__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider": False,
+                "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+                "__relay_internal__pv__IsWorkUserrelayprovider": False,
+                "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+                "__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider": False,
+                "__relay_internal__pv__StoriesRingrelayprovider": False
+            }
 
-        if tag == None: self.tag = []
-        else: self.tag = tag
+            self.Data.update({
+                'fb_api_caller_class': 'RelayModern',
+                'fb_api_req_friendly_name': 'ComposerStoryCreateMutation',
+                'variables': json.dumps(variables),
+                'server_timestamps': True,
+                'doc_id': DOC_IDS['composer_create']
+            })
 
-    def Execute(self):
-        if not self.r or not self.cookie: tur = {'status':'failed','id':None,'message':'cookie invalid'}
-        else:
-            try:
-                sessionid = re.search('"sessionID":"(.*?)"',str(self.req)).group(1)
-                share_fbid = re.search('"share_fbid":"(.*?)"',str(self.req)).group(1)
-                try: tracking = re.findall('{"action_link":null,"badge":null,"follow_button":null},"encrypted_tracking":"(.*?)"},"__module_operation_CometFeedStoryTitleSection_story"',str(self.req))[-1]
-                except Exception as e: tracking = re.findall('"encrypted_tracking":"(.*?)"',str(self.req))[0]
-                Var = {"input":{"composer_entry_point":"inline_composer","composer_source_surface":"group","composer_type":"group","logging":{"composer_session_id":sessionid},"source":"WWW","is_tracking_encrypted":True,"tracking":[tracking,None],"attachments":[{"link":{"share_scrape_data":json.dumps({"share_type":22,"share_params":[int(share_fbid)]})}}],"message":{"ranges":[],"text":self.text},"with_tags_ids":self.tag,"inline_activities":[],"explicit_place_id":"0","text_format_preset_id":"0","navigation_data":{"attribution_id_v2":"CometSinglePostRoot.react,comet.post.single,via_cold_start,1703874125062,522238,,,"},"event_share_metadata":{"surface":"newsfeed"},"audience":{"to_id":self.group},"actor_id":self.Data['__user'],"client_mutation_id":"1"},"displayCommentsFeedbackContext":None,"displayCommentsContextEnableComment":None,"displayCommentsContextIsAdPreview":None,"displayCommentsContextIsAggregatedShare":None,"displayCommentsContextIsStorySet":None,"feedLocation":"GROUP","feedbackSource":0,"focusCommentID":None,"gridMediaWidth":None,"groupID":None,"scale":2,"privacySelectorRenderLocation":"COMET_STREAM","checkPhotosToReelsUpsellEligibility":False,"renderLocation":"group","useDefaultActor":False,"inviteShortLinkKey":None,"isFeed":False,"isFundraiser":False,"isFunFactPost":False,"isGroup":True,"isEvent":False,"isTimeline":False,"isSocialLearning":False,"isPageNewsFeed":False,"isProfileReviews":False,"isWorkSharedDraft":False,"UFI2CommentsProvider_commentsKey":None,"hashtag":None,"canUserManageOffers":False,"__relay_internal__pv__CometUFIIsRTAEnabledrelayprovider":False,"__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider":False,"__relay_internal__pv__IsWorkUserrelayprovider":False,"__relay_internal__pv__IsMergQAPollsrelayprovider":False,"__relay_internal__pv__StoriesArmadilloReplyEnabledrelayprovider":False,"__relay_internal__pv__StoriesRingrelayprovider":False}
-                self.Data.update({'fb_api_caller_class':'RelayModern','fb_api_req_friendly_name':'ComposerStoryCreateMutation','variables':json.dumps(Var),'server_timestamps':True,'doc_id':'7338317599553815'})
-                pos = self.r.post('https://web.facebook.com/api/graphql/', data=self.Data, cookies={'cookie':self.cookie}, allow_redirects=True).text.replace('\\','')
-                if 'Akun Anda dibatasi saat ini' in str(pos): tur = {'status':'failed','id':None,'message':'Your Account Restricted To Post In Group'}
-                else:
-                    idpost = re.search('"post_id":"(.*?)"',str(pos)).group(1)
-                    if 'pending_posts/%s'%(idpost) in str(pos): tur = {'status':'pending','id':idpost,'message':'Pending Post'}
-                    elif 'Tidak Dapat Membagikan Postingan' in str(pos): tur = {'status':'failed','id':None,'message':'post has been deleted or there is an error'}
-                    else: tur = {'status':'success','id':idpost,'message':None}
-            except Exception as e: tur = {'status':'failed','id':None,'message':'Terjadi Kesalahan'}
-        return(tur)
+            response = self.r.post(
+                ENDPOINTS['graphql'],
+                data=self.Data,
+                cookies={'cookie': self.cookie},
+                allow_redirects=True
+            ).text.replace('\\', '')
+
+            # Check for account restriction
+            if 'Akun Anda dibatasi' in response or 'account is restricted' in response.lower():
+                logger.warning("Account is restricted from sharing to groups")
+                return {
+                    'status': 'failed',
+                    'id': None,
+                    'message': 'Your account is currently restricted from sharing to groups'
+                }
+
+            # Check for share error
+            if 'Tidak Dapat Membagikan' in response or 'unable to share' in response.lower():
+                return {'status': 'failed', 'id': None, 'message': 'Unable to share - post may be deleted or private'}
+
+            # Extract post ID
+            post_id = safe_regex_search(r'"post_id":"(.*?)"', response)
+            if post_id:
+                # Check if pending approval
+                if f'pending_posts/{post_id}' in response:
+                    logger.info(f"Share pending approval: {post_id}")
+                    return {'status': 'pending', 'id': post_id, 'message': 'Share is pending admin approval'}
+
+                logger.info(f"Shared to group successfully: {post_id}")
+                return {'status': 'success', 'id': post_id, 'message': None}
+
+            return {'status': 'failed', 'id': None, 'message': 'Failed to share - no post ID in response'}
+
+        except SessionError as e:
+            return {'status': 'failed', 'id': None, 'message': str(e)}
+        except Exception as e:
+            logger.error(f"Share to group failed: {e}")
+            return {'status': 'failed', 'id': None, 'message': f'An error occurred: {e}'}

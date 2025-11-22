@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "FBTools"
+version = "0.1.0"
+description = "Facebook automation toolkit using reverse-engineered GraphQL API"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Dapunta Khurayra X", email = "dapuntaxd@gmail.com"}
+]
+maintainers = [
+    {name = "Walkercito"}
+]
+keywords = [
+    "facebook-scraper",
+    "facebook-parser",
+    "facebook-automation",
+    "facebook-tools",
+    "facebook-graphql"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent"
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "requests>=2.28.0",
+    "pycryptodome>=3.15.0",
+    "PyNaCl>=1.5.0",
+    "pyotp>=2.8.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Walkercito/FBToolKit"
+"Bug Tracker" = "https://github.com/Walkercito/FBToolKit/issues"
+"Original Repository" = "https://github.com/Dapunta/FBTools"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["FBTools*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
