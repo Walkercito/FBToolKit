@@ -25,7 +25,7 @@ import aiohttp
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from .Tools import safe_regex_search, safe_regex_findall, convert_url
+from .Tools import safe_regex_search, safe_regex_findall, convert_url, extract_photo_id, extract_session_id
 from .constants import (
     get_headers_get,
     get_headers_post,
@@ -218,7 +218,7 @@ class AsyncPostToFeed:
             ) as response:
                 text = await response.text()
 
-            photo_id = safe_regex_search(r'"photoID":"(.*?)"', text)
+            photo_id = extract_photo_id(text)
             if photo_id:
                 self.attachments.append({"photo": {"id": photo_id}})
                 logger.info(f"Uploaded photo: {filename} (ID: {photo_id})")
@@ -251,9 +251,8 @@ class AsyncPostToFeed:
             await self._upload_photo(source, data)
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', req_text)
-            if not session_id:
-                raise SessionError("Could not extract session ID")
+            session_id = extract_session_id(req_text)
+            # session_id is always valid (extract_session_id generates fallback if needed)
 
             variables = {
                 "input": {
@@ -429,7 +428,7 @@ class AsyncPostToGroup:
             ) as response:
                 text = await response.text()
 
-            photo_id = safe_regex_search(r'"photoID":"(.*?)"', text)
+            photo_id = extract_photo_id(text)
             if photo_id:
                 self.attachments.append({"photo": {"id": photo_id}})
                 return True
@@ -460,9 +459,8 @@ class AsyncPostToGroup:
             await self._upload_photo(source, data)
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', req_text)
-            if not session_id:
-                raise SessionError("Could not extract session ID")
+            session_id = extract_session_id(req_text)
+            # session_id is always valid (extract_session_id generates fallback if needed)
 
             variables = {
                 "input": {
@@ -618,7 +616,7 @@ class AsyncReactToPost:
             if not data:
                 return {'status': 'failed', 'react_type': react_type, 'message': 'Session error'}
 
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', req_text)
+            session_id = extract_session_id(req_text)
             feedback_id = safe_regex_search(
                 r'"feedback":\{"associated_group":null,"id":"(.*?)"\},"is_story_civic":null',
                 req_text

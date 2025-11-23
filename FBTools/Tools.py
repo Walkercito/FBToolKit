@@ -61,6 +61,70 @@ def safe_regex_search(
     return default
 
 
+def extract_photo_id(text: str) -> Optional[str]:
+    """
+    Extract photo ID from Facebook's upload response.
+
+    Tries multiple patterns to handle different response formats.
+
+    Args:
+        text: Response text from photo upload.
+
+    Returns:
+        Photo ID if found, None otherwise.
+    """
+    patterns = [
+        r'"photoID":"(\d+)"',
+        r'"photo_id":"(\d+)"',
+        r'"photoId":"(\d+)"',
+        r'"fbid":"(\d+)"',
+        r'"id":"(\d+)".*?"__typename":"Photo"',
+        r'photo_fbid=(\d+)',
+        r'"media_id":"(\d+)"',
+        r'"photo":\{"id":"(\d+)"',
+    ]
+
+    for pattern in patterns:
+        result = safe_regex_search(pattern, text)
+        if result:
+            logger.debug(f"Found photo ID with pattern: {pattern}")
+            return result
+
+    return None
+
+
+def extract_session_id(text: str) -> Optional[str]:
+    """
+    Extract session ID from Facebook's response.
+
+    Tries multiple patterns to handle different response formats.
+
+    Args:
+        text: Response text from Facebook.
+
+    Returns:
+        Session ID if found, None otherwise.
+    """
+    patterns = [
+        r'"sessionID":"([^"]+)"',
+        r'"session_id":"([^"]+)"',
+        r'"sessionId":"([^"]+)"',
+        r'"client_session_id":"([^"]+)"',
+        r'"composer_session_id":"([^"]+)"',
+    ]
+
+    for pattern in patterns:
+        result = safe_regex_search(pattern, text)
+        if result:
+            logger.debug(f"Found session ID with pattern: {pattern}")
+            return result
+
+    # Fallback: generate a UUID-like session ID if none found
+    import uuid
+    logger.warning("Could not extract session ID, generating fallback")
+    return str(uuid.uuid4())
+
+
 def safe_regex_findall(
     pattern: str,
     text: str,

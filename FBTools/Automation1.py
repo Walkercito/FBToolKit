@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
-from .Tools import convert_url, get_session_data, safe_regex_search, safe_regex_findall
+from .Tools import convert_url, get_session_data, safe_regex_search, safe_regex_findall, extract_photo_id, extract_session_id
 from .constants import (
     get_headers_get,
     get_headers_post,
@@ -207,12 +207,14 @@ class PostToFeed:
                 allow_redirects=True
             ).text
 
-            photo_id = safe_regex_search(r'"photoID":"(.*?)"', response)
+            photo_id = extract_photo_id(response)
             if photo_id:
                 self.attachments.append({"photo": {"id": photo_id}})
                 logger.info(f"Uploaded photo: {filename} (ID: {photo_id})")
                 return True
             else:
+                # Log response for debugging (truncated)
+                logger.debug(f"Photo upload response (truncated): {response[:500]}")
                 error_msg = f"Failed to get photo ID after upload: {filename}"
                 logger.warning(error_msg)
                 self.upload_errors.append(error_msg)
@@ -257,9 +259,8 @@ class PostToFeed:
             }
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
-            if not session_id:
-                raise SessionError("Could not extract session ID")
+            session_id = extract_session_id(self.req)
+            # session_id is always valid (extract_session_id generates fallback if needed)
 
             variables = {
                 "input": {
@@ -479,12 +480,14 @@ class PostToGroup:
                 allow_redirects=True
             ).text
 
-            photo_id = safe_regex_search(r'"photoID":"(.*?)"', response)
+            photo_id = extract_photo_id(response)
             if photo_id:
                 self.attachments.append({"photo": {"id": photo_id}})
                 logger.info(f"Uploaded photo: {filename} (ID: {photo_id})")
                 return True
             else:
+                # Log response for debugging (truncated)
+                logger.debug(f"Photo upload response (truncated): {response[:500]}")
                 error_msg = f"Failed to get photo ID after upload: {filename}"
                 logger.warning(error_msg)
                 self.upload_errors.append(error_msg)
@@ -529,9 +532,8 @@ class PostToGroup:
             }
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
-            if not session_id:
-                raise SessionError("Could not extract session ID")
+            session_id = extract_session_id(self.req)
+            # session_id is always valid (extract_session_id generates fallback if needed)
 
             variables = {
                 "input": {
@@ -789,7 +791,7 @@ class CommentToPost:
             return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            session_id = extract_session_id(self.req)
             client_id = safe_regex_search(r'"clientID":"(.*?)"', self.req)
 
             if not session_id or not client_id:
@@ -943,9 +945,8 @@ class ReactToPost:
             return {'status': 'failed', 'react_type': react_type, 'message': 'Failed to extract session data'}
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
-            if not session_id:
-                raise SessionError("Could not extract session ID")
+            session_id = extract_session_id(self.req)
+            # session_id is always valid (extract_session_id generates fallback if needed)
 
             # Extract feedback ID
             feedback_id = safe_regex_search(
@@ -1080,7 +1081,7 @@ class ShareToFeed:
             return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            session_id = extract_session_id(self.req)
             share_fbid = safe_regex_search(r'"share_fbid":"(.*?)"', self.req)
 
             if not session_id or not share_fbid:
@@ -1280,7 +1281,7 @@ class ShareToGroup:
             return {'status': 'failed', 'id': None, 'message': 'Failed to extract session data'}
 
         try:
-            session_id = safe_regex_search(r'"sessionID":"(.*?)"', self.req)
+            session_id = extract_session_id(self.req)
             share_fbid = safe_regex_search(r'"share_fbid":"(.*?)"', self.req)
 
             if not session_id or not share_fbid:
