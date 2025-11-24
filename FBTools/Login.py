@@ -127,33 +127,83 @@ def LoginEmail(r, ua: str, email: str, password: str, wait_for_approval: bool = 
         Url = f'https://{Host}/login.php?'
         Req = r.get(Url, headers=HeadersGet, allow_redirects=True).text
 
-        # Extract form data
-        Data = {
-            'm_ts': re.search(r'name="m_ts" value="(.*?)"', Req).group(1),
-            'li': re.search(r'name="li" value="(.*?)"', Req).group(1),
-            'try_number': re.search(r'name="try_number" value="(.*?)"', Req).group(1),
-            'unrecognized_tries': re.search(r'name="unrecognized_tries" value="(.*?)"', Req).group(1),
-            'email': email,
-            'prefill_contact_point': email,
-            'prefill_source': 'browser_dropdown',
-            'prefill_type': 'contact_point',
-            'first_prefill_source': 'browser_dropdown',
-            'first_prefill_type': 'contact_point',
-            'had_cp_prefilled': True,
-            'had_password_prefilled': False,
-            'is_smart_lock': False,
-            'bi_xrwh': re.search(r'name="bi_xrwh" value="(.*?)"', Req).group(1),
-            'bi_wvdp': '{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false,"iframeProto":"function get contentWindow() { [native code] }","remap":false,"iframeData":{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false}}',
-            'pass': password,
-            'fb_dtsg': re.search(r'\{"dtsg":\{"token":"(.*?)"', Req).group(1),
-            'jazoest': re.search(r'name="jazoest" value="(.*?)"', Req).group(1),
-            'lsd': re.search(r'name="lsd" value="(.*?)"', Req).group(1),
-            '__dyn': '',
-            '__csr': '',
-            '__req': str(random.randrange(1, 6)),
-            '__a': re.search(r'"encrypted":"(.*?)"', Req).group(1),
-            '__user': '0'
-        }
+        # Log the URL we ended up at (after redirects)
+        logger.debug(f"Login page URL: {r.url}")
+
+        # Check if we got redirected to Instagram or something else
+        if '/ig/' in Req or 'instagram' in Req.lower():
+            logger.error("Facebook redirected to Instagram login. This might be due to:")
+            logger.error("  1. Email format issue")
+            logger.error("  2. Facebook detecting automation")
+            logger.error("  3. Account linked to Instagram")
+            logger.error(f"Response preview: {Req[:500]}")
+            return False
+
+        # Extract form data with better error handling
+        try:
+            m_ts = re.search(r'name="m_ts" value="(.*?)"', Req)
+            if not m_ts:
+                logger.error("Could not find 'm_ts' field in login form")
+                logger.debug(f"Response preview: {Req[:1000]}")
+                return False
+
+            li = re.search(r'name="li" value="(.*?)"', Req)
+            try_number = re.search(r'name="try_number" value="(.*?)"', Req)
+            unrecognized_tries = re.search(r'name="unrecognized_tries" value="(.*?)"', Req)
+            bi_xrwh = re.search(r'name="bi_xrwh" value="(.*?)"', Req)
+            fb_dtsg = re.search(r'\{"dtsg":\{"token":"(.*?)"', Req)
+            jazoest = re.search(r'name="jazoest" value="(.*?)"', Req)
+            lsd = re.search(r'name="lsd" value="(.*?)"', Req)
+            encrypted = re.search(r'"encrypted":"(.*?)"', Req)
+            ajax_uri = re.search(r'ajaxURI:"(.*?)"', Req)
+
+            # Check which fields are missing
+            missing_fields = []
+            if not li: missing_fields.append('li')
+            if not try_number: missing_fields.append('try_number')
+            if not unrecognized_tries: missing_fields.append('unrecognized_tries')
+            if not bi_xrwh: missing_fields.append('bi_xrwh')
+            if not fb_dtsg: missing_fields.append('fb_dtsg')
+            if not jazoest: missing_fields.append('jazoest')
+            if not lsd: missing_fields.append('lsd')
+            if not encrypted: missing_fields.append('__a')
+            if not ajax_uri: missing_fields.append('ajaxURI')
+
+            if missing_fields:
+                logger.error(f"Missing form fields: {', '.join(missing_fields)}")
+                logger.debug(f"Response preview: {Req[:1000]}")
+                return False
+
+            Data = {
+                'm_ts': m_ts.group(1),
+                'li': li.group(1),
+                'try_number': try_number.group(1),
+                'unrecognized_tries': unrecognized_tries.group(1),
+                'email': email,
+                'prefill_contact_point': email,
+                'prefill_source': 'browser_dropdown',
+                'prefill_type': 'contact_point',
+                'first_prefill_source': 'browser_dropdown',
+                'first_prefill_type': 'contact_point',
+                'had_cp_prefilled': True,
+                'had_password_prefilled': False,
+                'is_smart_lock': False,
+                'bi_xrwh': bi_xrwh.group(1),
+                'bi_wvdp': '{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false,"iframeProto":"function get contentWindow() { [native code] }","remap":false,"iframeData":{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false}}',
+                'pass': password,
+                'fb_dtsg': fb_dtsg.group(1),
+                'jazoest': jazoest.group(1),
+                'lsd': lsd.group(1),
+                '__dyn': '',
+                '__csr': '',
+                '__req': str(random.randrange(1, 6)),
+                '__a': encrypted.group(1),
+                '__user': '0'
+            }
+        except AttributeError as e:
+            logger.error(f"Failed to extract form field: {e}")
+            logger.debug(f"Response preview: {Req[:1000]}")
+            return False
 
         Cookie = '; '.join([f'{x}={y}' for x, y in r.cookies.get_dict().items()])
         Cookie += '; dpr=4; locale=en_US; m_pixel_ratio=4; wd=360x800;'
@@ -187,7 +237,7 @@ def LoginEmail(r, ua: str, email: str, password: str, wait_for_approval: bool = 
             'Priority': 'u=0, i'
         }
 
-        Next = 'https://%s%s' % (Host, re.search(r'ajaxURI:"(.*?)"', Req).group(1))
+        Next = 'https://%s%s' % (Host, ajax_uri.group(1))
         r.post(Next, data=Data, headers=HeadersPost, cookies={'cookie': Cookie}, allow_redirects=True)
 
         # Get updated cookies
@@ -354,32 +404,83 @@ def LoginPhone(r, ua: str, phone: str, password: str, wait_for_approval: bool = 
         Url = f'https://{Host}/login.php?'
         Req = r.get(Url, headers=HeadersGet, allow_redirects=True).text
 
-        Data = {
-            'm_ts': re.search(r'name="m_ts" value="(.*?)"', Req).group(1),
-            'li': re.search(r'name="li" value="(.*?)"', Req).group(1),
-            'try_number': re.search(r'name="try_number" value="(.*?)"', Req).group(1),
-            'unrecognized_tries': re.search(r'name="unrecognized_tries" value="(.*?)"', Req).group(1),
-            'email': phone,
-            'prefill_contact_point': phone,
-            'prefill_source': 'browser_dropdown',
-            'prefill_type': 'contact_point',
-            'first_prefill_source': 'browser_dropdown',
-            'first_prefill_type': 'contact_point',
-            'had_cp_prefilled': True,
-            'had_password_prefilled': False,
-            'is_smart_lock': False,
-            'bi_xrwh': re.search(r'name="bi_xrwh" value="(.*?)"', Req).group(1),
-            'bi_wvdp': '{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false,"iframeProto":"function get contentWindow() { [native code] }","remap":false,"iframeData":{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false}}',
-            'pass': password,
-            'fb_dtsg': re.search(r'\{"dtsg":\{"token":"(.*?)"', Req).group(1),
-            'jazoest': re.search(r'name="jazoest" value="(.*?)"', Req).group(1),
-            'lsd': re.search(r'name="lsd" value="(.*?)"', Req).group(1),
-            '__dyn': '',
-            '__csr': '',
-            '__req': str(random.randrange(1, 6)),
-            '__a': re.search(r'"encrypted":"(.*?)"', Req).group(1),
-            '__user': '0'
-        }
+        # Log the URL we ended up at (after redirects)
+        logger.debug(f"Login page URL: {r.url}")
+
+        # Check if we got redirected to Instagram or something else
+        if '/ig/' in Req or 'instagram' in Req.lower():
+            logger.error("Facebook redirected to Instagram login. This might be due to:")
+            logger.error("  1. Phone number format issue")
+            logger.error("  2. Facebook detecting automation")
+            logger.error("  3. Account linked to Instagram")
+            logger.error(f"Response preview: {Req[:500]}")
+            return False
+
+        # Extract form data with better error handling
+        try:
+            m_ts = re.search(r'name="m_ts" value="(.*?)"', Req)
+            if not m_ts:
+                logger.error("Could not find 'm_ts' field in login form")
+                logger.debug(f"Response preview: {Req[:1000]}")
+                return False
+
+            li = re.search(r'name="li" value="(.*?)"', Req)
+            try_number = re.search(r'name="try_number" value="(.*?)"', Req)
+            unrecognized_tries = re.search(r'name="unrecognized_tries" value="(.*?)"', Req)
+            bi_xrwh = re.search(r'name="bi_xrwh" value="(.*?)"', Req)
+            fb_dtsg = re.search(r'\{"dtsg":\{"token":"(.*?)"', Req)
+            jazoest = re.search(r'name="jazoest" value="(.*?)"', Req)
+            lsd = re.search(r'name="lsd" value="(.*?)"', Req)
+            encrypted = re.search(r'"encrypted":"(.*?)"', Req)
+            ajax_uri = re.search(r'ajaxURI:"(.*?)"', Req)
+
+            # Check which fields are missing
+            missing_fields = []
+            if not li: missing_fields.append('li')
+            if not try_number: missing_fields.append('try_number')
+            if not unrecognized_tries: missing_fields.append('unrecognized_tries')
+            if not bi_xrwh: missing_fields.append('bi_xrwh')
+            if not fb_dtsg: missing_fields.append('fb_dtsg')
+            if not jazoest: missing_fields.append('jazoest')
+            if not lsd: missing_fields.append('lsd')
+            if not encrypted: missing_fields.append('__a')
+            if not ajax_uri: missing_fields.append('ajaxURI')
+
+            if missing_fields:
+                logger.error(f"Missing form fields: {', '.join(missing_fields)}")
+                logger.debug(f"Response preview: {Req[:1000]}")
+                return False
+
+            Data = {
+                'm_ts': m_ts.group(1),
+                'li': li.group(1),
+                'try_number': try_number.group(1),
+                'unrecognized_tries': unrecognized_tries.group(1),
+                'email': phone,
+                'prefill_contact_point': phone,
+                'prefill_source': 'browser_dropdown',
+                'prefill_type': 'contact_point',
+                'first_prefill_source': 'browser_dropdown',
+                'first_prefill_type': 'contact_point',
+                'had_cp_prefilled': True,
+                'had_password_prefilled': False,
+                'is_smart_lock': False,
+                'bi_xrwh': bi_xrwh.group(1),
+                'bi_wvdp': '{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false,"iframeProto":"function get contentWindow() { [native code] }","remap":false,"iframeData":{"hwc":true,"hwcr":false,"has_dnt":true,"has_standalone":false,"wnd_toStr_toStr":"function toString() { [native code] }","hasPerm":false,"has_seWo":true,"has_meDe":true,"has_creds":true,"has_hwi_bt":false,"has_agjsi":false}}',
+                'pass': password,
+                'fb_dtsg': fb_dtsg.group(1),
+                'jazoest': jazoest.group(1),
+                'lsd': lsd.group(1),
+                '__dyn': '',
+                '__csr': '',
+                '__req': str(random.randrange(1, 6)),
+                '__a': encrypted.group(1),
+                '__user': '0'
+            }
+        except AttributeError as e:
+            logger.error(f"Failed to extract form field: {e}")
+            logger.debug(f"Response preview: {Req[:1000]}")
+            return False
 
         Cookie = '; '.join([f'{x}={y}' for x, y in r.cookies.get_dict().items()])
         Cookie += '; dpr=4; locale=en_US; m_pixel_ratio=4; wd=360x800;'
@@ -413,7 +514,7 @@ def LoginPhone(r, ua: str, phone: str, password: str, wait_for_approval: bool = 
             'Priority': 'u=0, i'
         }
 
-        Next = 'https://%s%s' % (Host, re.search(r'ajaxURI:"(.*?)"', Req).group(1))
+        Next = 'https://%s%s' % (Host, ajax_uri.group(1))
         r.post(Next, data=Data, headers=HeadersPost, cookies={'cookie': Cookie}, allow_redirects=True)
 
         # Get updated cookies
