@@ -125,10 +125,11 @@ def LoginEmail(r, ua: str, email: str, password: str, wait_for_approval: bool = 
         }
 
         Url = f'https://{Host}/login.php?'
-        Req = r.get(Url, headers=HeadersGet, allow_redirects=True).text
+        response = r.get(Url, headers=HeadersGet, allow_redirects=True)
+        Req = response.text
 
         # Log the URL we ended up at (after redirects)
-        logger.debug(f"Login page URL: {r.url}")
+        logger.debug(f"Login page URL: {response.url}")
 
         # Check if we got redirected to Instagram or something else
         if '/ig/' in Req or 'instagram' in Req.lower():
@@ -402,10 +403,11 @@ def LoginPhone(r, ua: str, phone: str, password: str, wait_for_approval: bool = 
         }
 
         Url = f'https://{Host}/login.php?'
-        Req = r.get(Url, headers=HeadersGet, allow_redirects=True).text
+        response = r.get(Url, headers=HeadersGet, allow_redirects=True)
+        Req = response.text
 
         # Log the URL we ended up at (after redirects)
-        logger.debug(f"Login page URL: {r.url}")
+        logger.debug(f"Login page URL: {response.url}")
 
         # Check if we got redirected to Instagram or something else
         if '/ig/' in Req or 'instagram' in Req.lower():
