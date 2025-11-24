@@ -38,7 +38,7 @@ Note:
     if Facebook changes their API structure.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "Dapunta Khurayra X"
 __maintainer__ = "Walkercito"
 

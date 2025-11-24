@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FBTools"
-version = "0.1.1"
+version = "0.1.2"
 description = "Facebook automation toolkit using reverse-engineered GraphQL API"
 readme = "README.md"
 authors = [
