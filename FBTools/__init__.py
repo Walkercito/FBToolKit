@@ -91,6 +91,8 @@ class Start:
         email: Facebook email (requires password).
         phone: Facebook phone number (requires password).
         password: Account password (required for email/phone login).
+        wait_for_approval: Wait for security approval if required (default: True).
+        approval_timeout: Seconds to wait for approval (default: 60).
 
     Attributes:
         IsValid: True if authentication was successful.
@@ -102,8 +104,11 @@ class Start:
         >>> if fb.IsValid:
         ...     print("Logged in successfully!")
 
-        >>> # Login with email/password
+        >>> # Login with email/password (waits for approval if needed)
         >>> fb = Start(email="user@example.com", password="password123")
+
+        >>> # Login with phone (custom approval timeout)
+        >>> fb = Start(phone="+1234567890", password="pass", approval_timeout=120)
     """
 
     def __init__(
@@ -111,7 +116,9 @@ class Start:
         cookie: str = None,
         email: str = None,
         phone: str = None,
-        password: str = None
+        password: str = None,
+        wait_for_approval: bool = True,
+        approval_timeout: int = 60
     ):
         self.user_agent_windows = USER_AGENT_WINDOWS
         self.user_agent_android = USER_AGENT_ANDROID
@@ -128,7 +135,11 @@ class Start:
                 logger.warning("Cookie validation failed")
 
         elif email and password:
-            validated_cookie = LoginEmail(self.r, self.user_agent_android, email, password)
+            validated_cookie = LoginEmail(
+                self.r, self.user_agent_android, email, password,
+                wait_for_approval=wait_for_approval,
+                approval_timeout=approval_timeout
+            )
             if validated_cookie:
                 self.cookie = validated_cookie
                 self.IsValid = True
@@ -136,7 +147,11 @@ class Start:
                 logger.warning("Email login failed")
 
         elif phone and password:
-            validated_cookie = LoginPhone(self.r, self.user_agent_android, phone, password)
+            validated_cookie = LoginPhone(
+                self.r, self.user_agent_android, phone, password,
+                wait_for_approval=wait_for_approval,
+                approval_timeout=approval_timeout
+            )
             if validated_cookie:
                 self.cookie = validated_cookie
                 self.IsValid = True

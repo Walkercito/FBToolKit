@@ -8,8 +8,8 @@ using cookies or email/phone credentials.
 import re
 import random
 import logging
-from typing import Optional
-
+import time
+from typing import Optional, Dict, Any
 from .constants import get_headers_get, USER_AGENT_WINDOWS
 
 logger = logging.getLogger('FBTools')
@@ -80,7 +80,7 @@ def LoginCookie(r, ua: str, cookie: str) -> Optional[str]:
         return False
 
 
-def LoginEmail(r, ua: str, email: str, password: str) -> Optional[str]:
+def LoginEmail(r, ua: str, email: str, password: str, wait_for_approval: bool = True, approval_timeout: int = 60) -> Optional[str]:
     """
     Login to Facebook using email and password.
 
@@ -89,12 +89,15 @@ def LoginEmail(r, ua: str, email: str, password: str) -> Optional[str]:
         ua: User agent string.
         email: Facebook email address.
         password: Account password.
+        wait_for_approval: If True, wait for security approval (default: True).
+        approval_timeout: Seconds to wait for approval (default: 60).
 
     Returns:
         Cookie string if login successful, False otherwise.
 
     Note:
-        This method uses Facebook's mobile login endpoint.
+        If Facebook requires security approval (notification to your phone/email),
+        this function will wait up to approval_timeout seconds for you to approve.
     """
     try:
         Host = 'm.prod.facebook.com'
@@ -187,14 +190,30 @@ def LoginEmail(r, ua: str, email: str, password: str) -> Optional[str]:
         Next = 'https://%s%s' % (Host, re.search(r'ajaxURI:"(.*?)"', Req).group(1))
         r.post(Next, data=Data, headers=HeadersPost, cookies={'cookie': Cookie}, allow_redirects=True)
 
-        Cookie = '; '.join([f'{x}={y}' for x, y in r.cookies.get_dict().items()])
+        # Get updated cookies
+        cookies_dict = r.cookies.get_dict()
+        Cookie = '; '.join([f'{x}={y}' for x, y in cookies_dict.items()])
         Cookie += '; dpr=4; locale=en_US; m_pixel_ratio=4; wd=360x800;'
 
+        # Check if login was immediate or needs approval
         if 'c_user' in Cookie:
-            logger.info("Email login successful")
+            logger.info("Email login successful (immediate)")
             return convert_cookie(Cookie)
+        elif wait_for_approval:
+            # Check if approval is needed and wait for it
+            approval_result = check_login_approval(r, cookies_dict, timeout=approval_timeout)
+
+            if approval_result['status'] == 'success':
+                logger.info("Email login successful (after approval)")
+                return convert_cookie(approval_result['cookie'])
+            elif approval_result['status'] == 'pending':
+                logger.warning(f"Email login pending: {approval_result['message']}")
+                return False
+            else:
+                logger.warning(f"Email login failed: {approval_result['message']}")
+                return False
         else:
-            logger.warning("Email login failed - no c_user cookie")
+            logger.warning("Email login failed - no c_user cookie and not waiting for approval")
             return False
 
     except Exception as e:
@@ -202,7 +221,93 @@ def LoginEmail(r, ua: str, email: str, password: str) -> Optional[str]:
         return False
 
 
-def LoginPhone(r, ua: str, phone: str, password: str) -> Optional[str]:
+def check_login_approval(r, cookies_dict: dict, timeout: int = 60) -> Dict[str, Any]:
+    """
+    Check if login requires approval and wait for it.
+
+    Args:
+        r: Requests session object.
+        cookies_dict: Current cookies dict.
+        timeout: Maximum seconds to wait for approval (default: 60).
+
+    Returns:
+        Dict with 'status', 'cookie', and 'message' keys.
+    """
+    logger.info("Checking for login approval requirement...")
+
+    # Check if we already have c_user (no approval needed)
+    Cookie = '; '.join([f'{x}={y}' for x, y in cookies_dict.items()])
+    if 'c_user' in Cookie:
+        return {'status': 'success', 'cookie': Cookie, 'message': None}
+
+    # Check if this is a checkpoint/approval situation
+    try:
+        test_req = r.get(
+            'https://m.facebook.com/checkpoint/',
+            cookies=cookies_dict,
+            allow_redirects=True
+        ).text
+
+        # Patterns that indicate approval needed
+        approval_patterns = [
+            'approve.*login',
+            'verify.*identity',
+            'security.*check',
+            'checkpoint',
+            'two.*factor',
+            'confirm.*this.*was.*you',
+        ]
+
+        needs_approval = any(re.search(pattern, test_req, re.IGNORECASE) for pattern in approval_patterns)
+
+        if needs_approval:
+            logger.info("⏳ Login requires approval. Please check your Facebook app/email for notification.")
+            logger.info(f"⏳ Waiting up to {timeout} seconds for approval...")
+
+            start_time = time.time()
+            check_interval = 3  # Check every 3 seconds
+
+            while (time.time() - start_time) < timeout:
+                time.sleep(check_interval)
+
+                # Try to get profile page
+                check_req = r.get(
+                    'https://www.facebook.com/me',
+                    cookies=cookies_dict,
+                    allow_redirects=True
+                )
+
+                # Update cookies
+                cookies_dict.update(check_req.cookies.get_dict())
+                Cookie = '; '.join([f'{x}={y}' for x, y in cookies_dict.items()])
+
+                # Check if c_user now exists
+                if 'c_user' in Cookie:
+                    logger.info("✓ Login approved successfully!")
+                    return {'status': 'success', 'cookie': Cookie, 'message': 'Approved'}
+
+                elapsed = int(time.time() - start_time)
+                remaining = timeout - elapsed
+                if remaining > 0 and elapsed % 10 == 0:  # Log every 10 seconds
+                    logger.info(f"⏳ Still waiting... ({remaining}s remaining)")
+
+            logger.warning(f"⏱ Timeout after {timeout} seconds. Login not approved.")
+            return {
+                'status': 'pending',
+                'cookie': None,
+                'message': f'Login approval timeout after {timeout}s. Please approve and try again with the same credentials.'
+            }
+
+        # If no approval patterns found, might be another error
+        logger.warning("Login failed - unexpected response")
+        return {'status': 'failed', 'cookie': None, 'message': 'Unexpected login response'}
+
+    except Exception as e:
+        logger.error(f"Error checking approval: {e}")
+        return {'status': 'error', 'cookie': None, 'message': str(e)}
+
+
+def LoginPhone(r, ua: str, phone: str, password: str, wait_for_approval: bool = True, approval_timeout: int = 60) -> Optional[str]:
     """
     Login to Facebook using phone number and password.
 
@@ -211,12 +316,15 @@ def LoginPhone(r, ua: str, phone: str, password: str) -> Optional[str]:
         ua: User agent string.
         phone: Facebook phone number.
         password: Account password.
+        wait_for_approval: If True, wait for security approval (default: True).
+        approval_timeout: Seconds to wait for approval (default: 60).
 
     Returns:
         Cookie string if login successful, False otherwise.
 
     Note:
-        This method uses the same endpoint as email login.
+        If Facebook requires security approval (notification to your phone/email),
+        this function will wait up to approval_timeout seconds for you to approve.
     """
     try:
         Host = 'm.prod.facebook.com'
@@ -308,14 +416,30 @@ def LoginPhone(r, ua: str, phone: str, password: str) -> Optional[str]:
         Next = 'https://%s%s' % (Host, re.search(r'ajaxURI:"(.*?)"', Req).group(1))
         r.post(Next, data=Data, headers=HeadersPost, cookies={'cookie': Cookie}, allow_redirects=True)
 
-        Cookie = '; '.join([f'{x}={y}' for x, y in r.cookies.get_dict().items()])
+        # Get updated cookies
+        cookies_dict = r.cookies.get_dict()
+        Cookie = '; '.join([f'{x}={y}' for x, y in cookies_dict.items()])
         Cookie += '; dpr=4; locale=en_US; m_pixel_ratio=4; wd=360x800;'
 
+        # Check if login was immediate or needs approval
         if 'c_user' in Cookie:
-            logger.info("Phone login successful")
+            logger.info("Phone login successful (immediate)")
             return convert_cookie(Cookie)
+        elif wait_for_approval:
+            # Check if approval is needed and wait for it
+            approval_result = check_login_approval(r, cookies_dict, timeout=approval_timeout)
+
+            if approval_result['status'] == 'success':
+                logger.info("Phone login successful (after approval)")
+                return convert_cookie(approval_result['cookie'])
+            elif approval_result['status'] == 'pending':
+                logger.warning(f"Phone login pending: {approval_result['message']}")
+                return False
+            else:
+                logger.warning(f"Phone login failed: {approval_result['message']}")
+                return False
         else:
-            logger.warning("Phone login failed - no c_user cookie")
+            logger.warning("Phone login failed - no c_user cookie and not waiting for approval")
             return False
 
     except Exception as e:
