@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: FBTools
-Version: 0.1.2
+Version: 0.1.3
 Summary: Facebook automation toolkit using reverse-engineered GraphQL API
 Author-email: Dapunta Khurayra X <dapuntaxd@gmail.com>
 Maintainer: Walkercito
