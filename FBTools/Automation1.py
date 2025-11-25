@@ -629,8 +629,25 @@ class PostToGroup:
                     'upload_errors': self.upload_errors
                 }
 
-            # Extract post ID
-            post_id = safe_regex_search(r'"post_id":"(.*?)"', response)
+            # Extract post ID with multiple patterns
+            post_id_patterns = [
+                r'"post_id":"(\d+)"',
+                r'"story_fbid":"(\d+)"',
+                r'"story_id":"(\d+)"',
+                r'"fbid":"(\d+)"',
+                r'"id":"(\d+)"',
+                r'story_fbid=(\d+)',
+                r'/posts/(\d+)',
+                r'"legacy_story_id":"(\d+)"',
+            ]
+
+            post_id = None
+            for pattern in post_id_patterns:
+                post_id = safe_regex_search(pattern, response)
+                if post_id:
+                    logger.debug(f"Found post ID with pattern: {pattern}")
+                    break
+
             if post_id:
                 # Check if post is pending approval
                 if f'pending_posts/{post_id}' in response:
@@ -649,6 +666,11 @@ class PostToGroup:
                     'message': None,
                     'upload_errors': self.upload_errors if self.upload_errors else None
                 }
+
+            # Log response for debugging
+            logger.error(f"Failed to extract post ID from response")
+            logger.debug(f"Response preview (first 1000 chars): {response[:1000]}")
+            logger.debug(f"Response preview (last 500 chars): {response[-500:]}")
 
             return {
                 'status': 'failed',
